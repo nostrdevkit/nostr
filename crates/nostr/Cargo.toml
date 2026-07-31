@@ -56,7 +56,7 @@ nip06 = ["dep:bip39"]
 nip44 = ["dep:base64", "dep:chacha20"]
 nip46 = ["nip04", "nip44"]
 nip47 = ["nip04"]
-nip49 = ["dep:chacha20poly1305", "dep:scrypt", "dep:unicode-normalization"]
+nip49 = ["dep:chacha20poly1305", "dep:scrypt", "dep:unicode-normalization", "dep:zeroize"]
 nip57 = ["dep:aes", "dep:cbc"]
 nip59 = ["nip44"]
 nip60 = ["nip44"]
@@ -81,6 +81,7 @@ serde_json.workspace = true
 unicode-normalization = { version = "0.1", default-features = false, optional = true }
 url = { version = "2.5", default-features = false, features = ["serde"], optional = true } # Used in std
 url-fork = { version = "3.0", default-features = false, features = ["serde"], optional = true } # Used for no_std
+zeroize = { version = "1.8", default-features = false, features = ["alloc"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }

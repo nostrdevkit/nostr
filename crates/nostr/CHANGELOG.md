@@ -23,6 +23,12 @@
 
 -->
 
+## Unreleased
+
+### Security
+
+- Zeroize normalized passwords, scrypt-derived keys, and decrypted plaintext buffers used by NIP-49.
+
 ## v0.44.3 - 2026/05/19
 
 ### Fixed

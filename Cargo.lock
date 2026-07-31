@@ -2696,6 +2696,7 @@ dependencies = [
  "unicode-normalization",
  "url",
  "url-fork",
+ "zeroize",
 ]
 
 [[package]]

@@ -20,6 +20,7 @@ use secp256k1::rand::rngs::OsRng;
 use secp256k1::rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use unicode_normalization::UnicodeNormalization;
+use zeroize::Zeroizing;
 
 use super::nip19::{FromBech32, ToBech32};
 use crate::{key, SecretKey};
@@ -217,10 +218,11 @@ impl EncryptedSecretKey {
         let nonce = XChaCha20Poly1305::generate_nonce(rng);
 
         // Derive key
-        let key: [u8; KEY_SIZE] = derive_key(password, &salt, log_n)?;
+        let key = derive_key(password, &salt, log_n)?;
 
         // Compose cipher
-        let cipher = XChaCha20Poly1305::new(&key.into());
+        let cipher = XChaCha20Poly1305::new_from_slice(key.as_ref())
+            .expect("NIP-49 derived keys always have the required length");
 
         // Compose payload
         let payload = Payload {
@@ -323,11 +325,17 @@ impl EncryptedSecretKey {
 
     /// Decrypt secret key
     pub fn decrypt(&self, password: &str) -> Result<SecretKey, Error> {
+        let bytes = self.decrypt_secret_bytes(password)?;
+        Ok(SecretKey::from_slice(&bytes)?)
+    }
+
+    fn decrypt_secret_bytes(&self, password: &str) -> Result<Zeroizing<Vec<u8>>, Error> {
         // Derive key
-        let key: [u8; KEY_SIZE] = derive_key(password, &self.salt, self.log_n)?;
+        let key = derive_key(password, &self.salt, self.log_n)?;
 
         // Compose cipher
-        let cipher = XChaCha20Poly1305::new(&key.into());
+        let cipher = XChaCha20Poly1305::new_from_slice(key.as_ref())
+            .expect("NIP-49 derived keys always have the required length");
 
         // Compose payload
         let payload = Payload {
@@ -336,10 +344,8 @@ impl EncryptedSecretKey {
         };
 
         // Decrypt
-        let bytes: Vec<u8> = cipher.decrypt(&self.nonce.into(), payload)?;
-
-        // Parse secret key from bytes
-        Ok(SecretKey::from_slice(&bytes)?)
+        let bytes = cipher.decrypt(&self.nonce.into(), payload)?;
+        Ok(Zeroizing::new(bytes))
     }
 }
 
@@ -363,25 +369,61 @@ impl<'de> Deserialize<'de> for EncryptedSecretKey {
     }
 }
 
-fn derive_key(password: &str, salt: &[u8; SALT_SIZE], log_n: u8) -> Result<[u8; KEY_SIZE], Error> {
+fn normalize_password(password: &str) -> Zeroizing<String> {
+    Zeroizing::new(password.nfkc().collect())
+}
+
+fn derive_key(
+    password: &str,
+    salt: &[u8; SALT_SIZE],
+    log_n: u8,
+) -> Result<Zeroizing<[u8; KEY_SIZE]>, Error> {
     // Unicode Normalization
-    let password: String = password.nfkc().collect();
+    let password = normalize_password(password);
 
     // Compose params
     let params: ScryptParams = ScryptParams::new(log_n, 8, 1, KEY_SIZE)?;
 
     // Derive key
-    let mut key: [u8; KEY_SIZE] = [0u8; KEY_SIZE];
-    scrypt::scrypt(password.as_bytes(), salt, &params, &mut key)?;
+    let mut key = Zeroizing::new([0u8; KEY_SIZE]);
+    scrypt::scrypt(password.as_bytes(), salt, &params, key.as_mut())?;
     Ok(key)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zeroize::ZeroizeOnDrop;
 
     const CRYPTSEC: &str = "ncryptsec1qgg9947rlpvqu76pj5ecreduf9jxhselq2nae2kghhvd5g7dgjtcxfqtd67p9m0w57lspw8gsq6yphnm8623nsl8xn9j4jdzz84zm3frztj3z7s35vpzmqf6ksu8r89qk5z2zxfmu5gv8th8wclt0h4p";
     const SECRET_KEY: &str = "3501454135014541350145413501453fefb02227e449e57cf4d3a3ce05378683";
+
+    #[test]
+    fn test_sensitive_intermediates_zeroize_on_drop() {
+        fn assert_zeroize_on_drop<T: ZeroizeOnDrop>(_: &T) {}
+
+        let password = normalize_password("ｎｏｓｔｒ");
+        assert_eq!(password.as_str(), "nostr");
+        assert_zeroize_on_drop(&password);
+
+        let salt = [0u8; SALT_SIZE];
+        let key = derive_key(&password, &salt, 1).unwrap();
+        assert_zeroize_on_drop(&key);
+
+        let cipher = XChaCha20Poly1305::new_from_slice(key.as_ref()).unwrap();
+        assert_zeroize_on_drop(&cipher);
+    }
+
+    #[test]
+    fn test_decrypted_plaintext_zeroizes_on_drop() {
+        fn assert_zeroize_on_drop<T: ZeroizeOnDrop>(_: &T) {}
+
+        let encrypted_secret_key = EncryptedSecretKey::from_bech32(CRYPTSEC).unwrap();
+        let bytes = encrypted_secret_key.decrypt_secret_bytes("nostr").unwrap();
+
+        assert_zeroize_on_drop(&bytes);
+        assert_eq!(hex::encode(&*bytes), SECRET_KEY);
+    }
 
     #[test]
     fn test_encrypted_secret_key_decryption() {
