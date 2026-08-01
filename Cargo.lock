@@ -3442,9 +3442,9 @@ dependencies = [
 
 [[package]]
 name = "universal-time"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f942cacf37a673350e8f252dff4691fb8e525a5fff6e1f2c4b6c2f3b8349248d"
+checksum = "47a939edecc3c5a7b83c02e5f6b3c31d2bc69eabcc9a87ab12c6d37ee6dbc856"
 
 [[package]]
 name = "untrusted"
