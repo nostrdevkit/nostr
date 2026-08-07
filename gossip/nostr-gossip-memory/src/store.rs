@@ -54,7 +54,10 @@ pub struct NostrGossipMemory {
 }
 
 impl NostrGossipMemory {
-    /// Construct a new **unbounded** instance
+    /// Creates an unbounded cache for testing or non-production use.
+    ///
+    /// Prefer [`NostrGossipMemory::bounded`] for production code to avoid
+    /// unbounded memory growth.
     pub fn unbounded() -> Self {
         Self {
             public_keys: RwLock::new(LruCache::unbounded()),
