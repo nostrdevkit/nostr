@@ -22,7 +22,7 @@ use nostr_gossip::{
 };
 use tokio::sync::RwLock;
 
-use crate::constant::{MAX_NIP17_SIZE, MAX_NIP65_SIZE, TTL_OUTDATED};
+use crate::constant::{MAX_NIP17_SIZE, MAX_NIP65_SIZE, MAX_RELAYS_PER_PK, TTL_OUTDATED};
 
 #[derive(Default)]
 struct PkRelayData {
@@ -375,13 +375,15 @@ impl NostrGossipMemory {
 
 /// Add relay per user or update the received events and bitflags.
 fn update_relay_per_user(pk_data: &mut PkData, relay_url: RelayUrl, flags: GossipFlags) {
+    let relays_len = pk_data.relays.len();
+
     match pk_data.relays.get_mut(&relay_url) {
         Some(relay_data) => {
             relay_data.bitflags.add(flags);
             relay_data.received_events = relay_data.received_events.saturating_add(1);
             relay_data.last_received_event = Some(Timestamp::now());
         }
-        None => {
+        None if relays_len <= MAX_RELAYS_PER_PK => {
             let mut relay_data = PkRelayData::default();
 
             relay_data.bitflags.add(flags);
@@ -390,6 +392,8 @@ fn update_relay_per_user(pk_data: &mut PkData, relay_url: RelayUrl, flags: Gossi
 
             pk_data.relays.insert(relay_url, relay_data);
         }
+        // ignore new relays when the maximum per-key relay limit is reached.
+        _ => {}
     }
 }
 
