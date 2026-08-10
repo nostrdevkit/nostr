@@ -37,8 +37,10 @@ const INVITE_RESPONSE_TIMESTAMP_WINDOW: u64 = 2 * 24 * 60 * 60;
 /// A NIP-118 invitation to establish a NIP-117 session.
 ///
 /// Invitations created locally own the ephemeral secret key needed to process
-/// responses. Invitations parsed from a URL or event contain only public data
-/// and can be accepted, but cannot process a response.
+/// responses. Invitations parsed from a URL or event retain the shared secret,
+/// but not the inviter's ephemeral secret key; they can be accepted, but cannot
+/// process a response. A private invite URL is sensitive capability material,
+/// while a published invite event exposes its shared secret publicly.
 ///
 /// The serialized representation of an owned invite contains both the
 /// ephemeral secret key and the shared secret and must be stored securely.
@@ -193,7 +195,7 @@ impl Invite {
         })
     }
 
-    /// Construct an invite from its public, shareable parts.
+    /// Construct an acceptor-side invite from its shareable parts.
     pub fn from_public_parts(
         inviter: PublicKey,
         inviter_ephemeral_public_key: PublicKey,
@@ -240,9 +242,10 @@ impl Invite {
         self.inviter_ephemeral_secret_key.as_ref()
     }
 
-    /// Get the shared secret.
+    /// Get the invite shared secret.
     ///
-    /// This value is sensitive and must only be shared with intended invitees.
+    /// This value is sensitive in a private invite. A public invite event exposes it, so it must
+    /// not be treated as access-control material in that case.
     #[inline]
     pub fn shared_secret(&self) -> &[u8; 32] {
         &self.shared_secret
@@ -268,7 +271,7 @@ impl Invite {
         Ok(url.to_string())
     }
 
-    /// Parse a public-only invite from a URL fragment.
+    /// Parse an acceptor-side invite from a URL fragment.
     pub fn from_url<S>(url: S) -> Result<Self, Error>
     where
         S: AsRef<str>,
@@ -330,7 +333,7 @@ impl Invite {
         ))
     }
 
-    /// Parse and verify a public-only invite from a signed event.
+    /// Parse and verify an acceptor-side invite from a signed event.
     pub fn from_event(event: &Event) -> Result<Self, Error> {
         if event.kind != Kind::ApplicationSpecificData {
             return Err(invalid("invalid invite event kind"));
