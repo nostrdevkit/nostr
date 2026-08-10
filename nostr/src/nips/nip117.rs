@@ -6,12 +6,18 @@
 //!
 //! <https://github.com/nostr-protocol/nips/pull/1813>
 //!
+//! If a user's main Nostr private key is compromised, an attacker can decrypt stored NIP-17
+//! messages received in the past and messages received in the future. An established NIP-117
+//! session instead uses independent keys that rotate after every message, so compromising the main
+//! key alone does not reveal the session's past or future traffic.
+//!
 //! A [`Session`] encrypts arbitrary [`UnsignedEvent`] rumors into signed kind `1060` events and
 //! decrypts them while advancing its ratchet state. Persist the newest session after every
 //! successful operation; after sending, store it together with the returned event and republish
 //! that same event on retry. Use [`Session::remote_public_keys`] and [`Session::matches_sender`] to
-//! route fetched events. NIP-118 provides the invite handshake that creates matching sessions for
-//! both participants.
+//! route fetched events. NIP-118 provides an optional invite handshake; callers can instead create
+//! matching sessions after exchanging the ephemeral public keys and shared secret through another
+//! authenticated channel.
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
@@ -154,6 +160,10 @@ impl Session {
     ///
     /// The newly generated `next` key is used for the initial sending-chain derivation. This is
     /// the interoperable construction used by current NIP-117 implementations.
+    ///
+    /// This constructor can be used without NIP-118 when participants exchange their ephemeral
+    /// public keys and shared secret over another authenticated channel. The peer initializes the
+    /// matching side with [`Session::new_responder`].
     pub fn new_initiator_with_rng<R>(
         their_ephemeral_public_key: PublicKey,
         our_ephemeral_secret_key: SecretKey,
@@ -187,6 +197,9 @@ impl Session {
     }
 
     /// Start a session as the responder.
+    ///
+    /// This constructor can be used without NIP-118 when participants exchange their ephemeral
+    /// public keys and shared secret over another authenticated channel.
     ///
     /// A responder cannot send until it has successfully received the initiator's first message.
     pub fn new_responder(

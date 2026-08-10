@@ -6,9 +6,12 @@
 //!
 //! <https://github.com/nostr-protocol/nips/pull/1813>
 //!
-//! This module implements the protocol-level invite and response handshake. It
-//! intentionally does not implement invite-use policy, persistence management,
-//! device rosters, or session management.
+//! This module implements the protocol-level invite and response handshake. It returns initialized
+//! [`Session`] and [`Event`] values that applications can connect to their relay, persistence,
+//! contact, and device layers.
+//!
+//! NIP-118 is optional: applications that already exchange ephemeral public keys and a shared
+//! secret through another authenticated channel can construct matching NIP-117 sessions directly.
 //!
 //! # Workflow
 //!
