@@ -27,6 +27,12 @@
 
 -->
 
+## Unreleased
+
+### Added
+
+- Add experimental NIP-117 Double Ratchet sessions and NIP-118 invites (https://github.com/nostr-protocol/nips/pull/1813)
+
 ## v0.45.1 - 2026/08/07
 
 ### Breaking changes

@@ -109,6 +109,8 @@ Some features are behind crate flags or only available when using a specific cra
 |     ✅     | [94 - File Metadata](https://github.com/nostr-protocol/nips/blob/master/94.md)                                  |
 |     ✅     | [98 - HTTP Auth](https://github.com/nostr-protocol/nips/blob/master/98.md)                                      |
 |     ❌     | [99 - Classified Listings](https://github.com/nostr-protocol/nips/blob/master/99.md)                            |
+|     ✅     | [117 - Double Ratchet sessions](https://github.com/nostr-protocol/nips/pull/1813)                               |
+|     ✅     | [118 - Double Ratchet invites](https://github.com/nostr-protocol/nips/pull/1813)                                |
 |     ✅     | [A0 - Voice Messages](https://github.com/nostr-protocol/nips/blob/master/A0.md)                                 |
 |     ✅     | [B0 - Web Bookmarks](https://github.com/nostr-protocol/nips/blob/master/B0.md)                                  |
 |     ✅     | [B7 - Blossom](https://github.com/nostr-protocol/nips/blob/master/B7.md)                                        |

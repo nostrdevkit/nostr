@@ -87,6 +87,8 @@ The following crate feature flags are available:
 | `nip49`            |   No    | Enable NIP-49: Private Key Encryption                         |
 | `nip59`            |   No    | Enable NIP-59: Gift Wrap                                      |
 | `nip60`            |   No    | Enable NIP-60: Cashu Wallets                                  |
+| `nip117`           |   No    | Enable NIP-117: Double Ratchet sessions                       |
+| `nip118`           |   No    | Enable NIP-118: Double Ratchet invites                        |
 
 ## WASM
 

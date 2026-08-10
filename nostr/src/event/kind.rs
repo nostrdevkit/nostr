@@ -77,6 +77,7 @@ kind_variants! {
     Repost => 6, "Repos", "<https://github.com/nostr-protocol/nips/blob/master/18.md>",
     GenericRepost => 16, "Generic Repos", "<https://github.com/nostr-protocol/nips/blob/master/18.md>",
     Comment => 1111, "Comment", "<https://github.com/nostr-protocol/nips/blob/master/22.md>",
+    DoubleRatchetMessage => 1060, "Double Ratchet Message", "<https://github.com/nostr-protocol/nips/pull/1813>",
     Reaction => 7, "Reaction", "<https://github.com/nostr-protocol/nips/blob/master/25.md>",
     BadgeAward => 8, "Badge Award", "<https://github.com/nostr-protocol/nips/blob/master/58.md>",
     ChannelCreation => 40, "Channel Creation", "<https://github.com/nostr-protocol/nips/blob/master/28.md>",

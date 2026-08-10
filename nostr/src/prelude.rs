@@ -67,6 +67,10 @@ pub use crate::nips::nip89::{self, *};
 pub use crate::nips::nip94::{self, *};
 #[cfg(feature = "nip98")]
 pub use crate::nips::nip98::{self, *};
+#[cfg(feature = "nip117")]
+pub use crate::nips::nip117::{self, *};
+#[cfg(feature = "nip118")]
+pub use crate::nips::nip118::{self, *};
 pub use crate::nips::nipa0::{self, *};
 pub use crate::nips::nipb0::{self, *};
 pub use crate::nips::nipb7::{self, *};
