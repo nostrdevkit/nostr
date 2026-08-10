@@ -5,6 +5,13 @@
 //! NIP-117: Double Ratchet
 //!
 //! <https://github.com/nostr-protocol/nips/pull/1813>
+//!
+//! A [`Session`] encrypts arbitrary [`UnsignedEvent`] rumors into signed kind `1060` events and
+//! decrypts them while advancing its ratchet state. Persist the newest session after every
+//! successful operation; after sending, store it together with the returned event and republish
+//! that same event on retry. Use [`Session::remote_public_keys`] and [`Session::matches_sender`] to
+//! route fetched events. NIP-118 provides the invite handshake that creates matching sessions for
+//! both participants.
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
@@ -219,6 +226,8 @@ impl Session {
     }
 
     /// Return all remote author keys for which the session can currently receive a message.
+    ///
+    /// Use these keys to build relay subscriptions, refreshing them after successful receives.
     pub fn remote_public_keys(&self) -> Vec<PublicKey> {
         let mut keys: Vec<PublicKey> = Vec::with_capacity(2 + self.skipped_keys.len());
         if let Some(public_key) = self.their_current_public_key {
@@ -238,6 +247,8 @@ impl Session {
     }
 
     /// Return whether `sender` belongs to a current or cached receiving chain.
+    ///
+    /// This can route a fetched kind `1060` event to a candidate session before decryption.
     #[inline]
     pub fn matches_sender(&self, sender: PublicKey) -> bool {
         self.their_current_public_key == Some(sender)
@@ -246,6 +257,10 @@ impl Session {
     }
 
     /// Encrypt a rumor into a signed kind `1060` event using caller-supplied randomness.
+    ///
+    /// On success the session has advanced. Durably store the new session state together with the
+    /// returned event before publishing it. Publication retries must reuse that event instead of
+    /// encrypting the rumor again from older state.
     pub fn send_message_with_rng<R>(
         &mut self,
         mut rumor: UnsignedEvent,

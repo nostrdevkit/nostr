@@ -9,6 +9,14 @@
 //! This module implements the protocol-level invite and response handshake. It
 //! intentionally does not implement invite-use policy, persistence management,
 //! device rosters, or session management.
+//!
+//! # Workflow
+//!
+//! The inviter creates and stores an owned [`Invite`], then shares a private URL or signs and
+//! publishes its public invite event. The invitee parses it and calls [`Invite::accept_with_rng`],
+//! stores the returned session with the response event, and publishes that event. After applying
+//! replay and invite-use policy, the inviter calls [`Invite::process_response`]. The invitee is
+//! the session initiator and sends the first kind `1060` message.
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -302,6 +310,8 @@ impl Invite {
     }
 
     /// Build an unsigned public invite event.
+    ///
+    /// The inviter must sign the returned event before publication.
     pub fn to_unsigned_event<S>(
         &self,
         identifier: S,
@@ -399,6 +409,9 @@ impl Invite {
     }
 
     /// Accept this invite and create the response event to publish.
+    ///
+    /// Persist the returned session together with the response event before publishing it. This
+    /// side is the session initiator and sends the first kind `1060` message.
     pub fn accept_with_rng<R>(
         &self,
         invitee_identity: &Keys,
