@@ -14,7 +14,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 use super::crypto::{
     Redacted, SecretBytes, decrypt_conversation_key_bytes, decrypt_header_with_key,
     derive_conversation_key, encrypt_conversation_key_with_rng, encrypted_header, invalid, kdf,
-    random_secret_key_with_rng, sign_event_with_rng, validate_outer_event, validate_rumor,
+    parse_rumor, random_secret_key_with_rng, sign_event_with_rng, validate_encoded_payload_size,
+    validate_outer_event, validate_rumor,
 };
 use super::{Header, MAX_SKIP, Session};
 use crate::error::Error;
@@ -263,6 +264,10 @@ impl Session {
     /// Once an old chain's final skipped key has been consumed or evicted, that sender is no
     /// longer associated with the session and a replay from it is an error. Any failure, including
     /// an invalid outer event or inner rumor ID, leaves the session byte-for-byte unchanged.
+    ///
+    /// The returned rumor's `pubkey` is peer-supplied inner data, not an independent proof of that
+    /// identity. Authenticate and persist the session-to-peer binding established by the invite or
+    /// other authenticated key-exchange channel.
     pub fn receive_message_with_rng<R>(
         &mut self,
         event: &Event,
@@ -271,11 +276,16 @@ impl Session {
     where
         R: Rng + CryptoRng,
     {
-        validate_outer_event(event)?;
+        if event.kind != Kind::DoubleRatchetMessage {
+            return Err(invalid("invalid double-ratchet event kind"));
+        }
         if !self.matches_sender(event.pubkey) {
             return Err(invalid("unexpected double-ratchet sender"));
         }
         let encrypted_header = encrypted_header(event)?;
+        validate_encoded_payload_size(encrypted_header.as_bytes())?;
+        validate_encoded_payload_size(event.content.as_bytes())?;
+        validate_outer_event(event)?;
 
         let mut next: Self = self.clone();
         let plaintext =
@@ -284,8 +294,7 @@ impl Session {
                 ReceiveResult::Duplicate => return Ok(None),
             };
 
-        let rumor: UnsignedEvent = serde_json::from_slice(&plaintext)?;
-        validate_rumor(&rumor)?;
+        let rumor = parse_rumor(&plaintext)?;
         *self = next;
         Ok(Some(rumor))
     }
@@ -330,6 +339,13 @@ impl Session {
         R: Rng + CryptoRng,
     {
         let (header, target) = self.decrypt_header(sender, encrypted_header)?;
+        header.next_public_key.xonly()?;
+
+        if target == HeaderTarget::Current && header.next_public_key != self.their_next_public_key {
+            return Err(invalid(
+                "current chain advertised an unexpected next ratchet key",
+            ));
+        }
 
         if target == HeaderTarget::Skipped {
             return self.decrypt_skipped_message(sender, header.number, ciphertext);

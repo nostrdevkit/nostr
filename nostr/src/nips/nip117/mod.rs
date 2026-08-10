@@ -17,7 +17,9 @@
 //! event and republish that same event on retry. Use [`Session::remote_public_keys`] and
 //! [`Session::matches_sender`] to route fetched events. NIP-118 provides an optional invite
 //! handshake; callers can instead create matching sessions after exchanging the ephemeral public
-//! keys and shared secret through another authenticated channel.
+//! keys and shared secret through another authenticated channel. Bind each session to the peer
+//! identity authenticated by that setup: an inner rumor's `pubkey` is peer-supplied data, not an
+//! independent identity proof.
 
 use alloc::collections::BTreeMap;
 
@@ -32,8 +34,8 @@ mod session;
 
 #[cfg(feature = "nip118")]
 pub(super) use self::crypto::{
-    decrypt_conversation_key, encrypt_conversation_key_with_rng, random_secret_key_with_rng,
-    sign_event_with_rng,
+    decrypt_conversation_key, encrypt_conversation_key_with_rng, parse_rumor,
+    random_secret_key_with_rng, sign_event_with_rng, validate_encoded_payload_size,
 };
 
 /// The largest permitted gap in a receiving chain.
@@ -59,9 +61,14 @@ pub struct Header {
 /// # Security
 ///
 /// Serialized session state contains private, root, chain, header, and skipped message keys. It
-/// must be treated as secret material and stored with appropriate encryption and access control.
-/// Use a single current copy of a session: concurrently using clones or restoring an older
-/// snapshot can reuse ratchet state, lose messages, or fork the conversation.
+/// must be treated as secret material and stored with authenticated encryption, access control,
+/// and rollback protection. An attacker who can alter or restore state can inject keys, reuse
+/// ratchet state, lose messages, or fork the conversation. Use a single current copy of a session:
+/// concurrently using clones can cause the same failures.
+///
+/// A session authenticates its ephemeral ratchet authors. Applications must separately retain the
+/// session-to-peer identity binding established by NIP-118 or another authenticated key exchange;
+/// the `pubkey` inside a decrypted rumor is self-asserted by that peer.
 #[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Session {

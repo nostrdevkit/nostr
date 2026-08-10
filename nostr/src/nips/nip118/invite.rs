@@ -10,8 +10,8 @@ use secp256k1::Secp256k1;
 use zeroize::Zeroize;
 
 use super::wire::{
-    InviteResponsePayload, invalid, missing, parse_response_session_key, validate_public_key,
-    validate_response_rumor, validate_response_tags,
+    InviteResponsePayload, invalid, missing, parse_response_payload, session_proof_digest,
+    validate_public_key, validate_response_rumor, validate_response_tags, verify_session_proof,
 };
 use super::{INVITE_RESPONSE_TIMESTAMP_WINDOW, Invite, InviteAcceptance, InviteResponse};
 use crate::error::Error;
@@ -19,8 +19,8 @@ use crate::event::{Event, Kind, Tag, UnsignedEvent};
 use crate::key::{Keys, PublicKey, SecretKey};
 use crate::nips::nip44::{self, Version};
 use crate::nips::nip117::{
-    Session, decrypt_conversation_key, encrypt_conversation_key_with_rng,
-    random_secret_key_with_rng, sign_event_with_rng,
+    Session, decrypt_conversation_key, encrypt_conversation_key_with_rng, parse_rumor,
+    random_secret_key_with_rng, sign_event_with_rng, validate_encoded_payload_size,
 };
 use crate::types::Timestamp;
 
@@ -149,6 +149,15 @@ impl Invite {
         let secp = Secp256k1::signing_only();
         let invitee_session_public_key =
             PublicKey::from_secret_key(&secp, &invitee_session_secret_key);
+        let proof_digest = session_proof_digest(
+            self.inviter,
+            self.inviter_ephemeral_public_key,
+            invitee_identity.public_key(),
+            invitee_session_public_key,
+            &self.shared_secret,
+        );
+        let invitee_session_keys = Keys::new_with_ctx(&secp, invitee_session_secret_key.clone());
+        let session_proof = invitee_session_keys.sign_schnorr_with_rng(&secp, proof_digest, rng);
         let session = Session::new_initiator_with_rng(
             self.inviter_ephemeral_public_key,
             invitee_session_secret_key,
@@ -158,6 +167,7 @@ impl Invite {
 
         let payload = serde_json::to_string(&InviteResponsePayload {
             session_key: invitee_session_public_key,
+            session_proof,
         })?;
         let identity_encrypted = nip44::encrypt_with_rng(
             invitee_identity.secret_key(),
@@ -210,6 +220,9 @@ impl Invite {
 
     /// Authenticate an invite response and initialize the inviter's session.
     ///
+    /// This verifies both the invitee identity encryption and a Schnorr proof that the invitee
+    /// controls the advertised session key before any session is constructed.
+    ///
     /// This protocol layer is intentionally stateless. Before installing the returned session,
     /// callers must deduplicate `event.id` and enforce their invite-use, expiration, and revocation
     /// policy so a replayed response cannot replace an established session.
@@ -230,19 +243,27 @@ impl Invite {
         if event.kind != Kind::GiftWrap {
             return Err(invalid("invalid invite response kind"));
         }
+        validate_encoded_payload_size(event.content.as_bytes())?;
         event.verify_with_ctx(&secp)?;
         validate_response_tags(event, self.inviter_ephemeral_public_key)?;
 
         let rumor_json =
             nip44::decrypt(inviter_ephemeral_secret_key, &event.pubkey, &event.content)?;
-        let rumor: UnsignedEvent = serde_json::from_str(&rumor_json)?;
+        let rumor = parse_rumor(rumor_json.as_bytes())?;
         validate_response_rumor(&rumor)?;
 
         let identity_encrypted = decrypt_conversation_key(&self.shared_secret, &rumor.content)?;
         let payload = nip44::decrypt(inviter_identity_secret, &rumor.pubkey, identity_encrypted)?;
-        let invitee_session_public_key = parse_response_session_key(&payload)?;
+        let payload = parse_response_payload(&payload)?;
+        verify_session_proof(
+            &payload,
+            self.inviter,
+            self.inviter_ephemeral_public_key,
+            rumor.pubkey,
+            &self.shared_secret,
+        )?;
         let session = Session::new_responder(
-            invitee_session_public_key,
+            payload.session_key,
             inviter_ephemeral_secret_key.clone(),
             self.shared_secret,
         )?;

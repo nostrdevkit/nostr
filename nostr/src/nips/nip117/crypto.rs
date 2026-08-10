@@ -12,14 +12,26 @@ use bitcoin_hashes::Hash;
 use rand::{CryptoRng, Rng};
 use secp256k1::Secp256k1;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use super::Header;
 use crate::error::{Error, ErrorKind};
-use crate::event::{Event, Kind, UnsignedEvent};
+use crate::event::{Event, EventId, Kind, Tags, UnsignedEvent};
 use crate::key::{Keys, PublicKey, SecretKey};
 use crate::nips::nip44::v2::ConversationKey;
+use crate::types::Timestamp;
 use crate::util::hkdf;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Rumor {
+    id: EventId,
+    pubkey: PublicKey,
+    created_at: Timestamp,
+    kind: Kind,
+    tags: Tags,
+    content: String,
+}
 
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct SecretBytes(pub(super) [u8; 32]);
@@ -49,7 +61,8 @@ impl Serialize for SecretBytes {
     where
         S: Serializer,
     {
-        serializer.serialize_str(&faster_hex::hex_string(&self.0))
+        let value = Zeroizing::new(faster_hex::hex_string(&self.0));
+        serializer.serialize_str(&value)
     }
 }
 
@@ -58,7 +71,7 @@ impl<'de> Deserialize<'de> for SecretBytes {
     where
         D: Deserializer<'de>,
     {
-        let value: String = String::deserialize(deserializer)?;
+        let value = Zeroizing::new(String::deserialize(deserializer)?);
         let bytes = crate::util::hex_decode::<32>(&value).map_err(serde::de::Error::custom)?;
         Ok(Self(bytes))
     }
@@ -77,6 +90,13 @@ pub(super) fn invalid(message: &'static str) -> Error {
     Error::with_static_message(ErrorKind::Invalid, message)
 }
 
+pub(in crate::nips) fn validate_encoded_payload_size(payload: &[u8]) -> Result<(), Error> {
+    if payload.len() > crate::nips::nip44::v2::MAX_ENCODED_PAYLOAD_SIZE {
+        return Err(invalid("NIP-44 payload is too large"));
+    }
+    Ok(())
+}
+
 pub(super) fn validate_rumor(rumor: &UnsignedEvent) -> Result<(), Error> {
     let id = rumor
         .id
@@ -85,6 +105,25 @@ pub(super) fn validate_rumor(rumor: &UnsignedEvent) -> Result<(), Error> {
         return Err(invalid("invalid double-ratchet rumor ID"));
     }
     Ok(())
+}
+
+/// Parse the exact unsigned-event wire shape used for encrypted rumors.
+///
+/// `UnsignedEvent` is intentionally permissive when used as a general API type. Ratchet rumors
+/// must be strict so signed-event fields such as `sig`, or any other extension not represented by
+/// the returned type, cannot be silently discarded before the rumor ID is validated.
+pub(in crate::nips) fn parse_rumor(payload: &[u8]) -> Result<UnsignedEvent, Error> {
+    let rumor: Rumor = serde_json::from_slice(payload)?;
+    let rumor = UnsignedEvent {
+        id: Some(rumor.id),
+        pubkey: rumor.pubkey,
+        created_at: rumor.created_at,
+        kind: rumor.kind,
+        tags: rumor.tags,
+        content: rumor.content,
+    };
+    validate_rumor(&rumor)?;
+    Ok(rumor)
 }
 
 pub(super) fn validate_outer_event(event: &Event) -> Result<(), Error> {
@@ -208,15 +247,11 @@ pub(super) fn decrypt_conversation_key_bytes<T>(
 where
     T: AsRef<[u8]>,
 {
+    let payload = payload.as_ref();
+    validate_encoded_payload_size(payload)?;
     let decoded = general_purpose::STANDARD
-        .decode(payload.as_ref())
+        .decode(payload)
         .map_err(Error::malformed_display)?;
-    if decoded.first() != Some(&2) {
-        return Err(Error::with_static_message(
-            ErrorKind::Unsupported,
-            "unsupported NIP-44 payload version",
-        ));
-    }
     let key = ConversationKey::new(*conversation_key);
     crate::nips::nip44::v2::decrypt_to_bytes(&key, &decoded)
 }

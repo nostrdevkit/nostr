@@ -100,6 +100,53 @@ fn send_raw_plaintext(session: &mut Session, plaintext: &[u8], rng: &mut TestRng
     event
 }
 
+fn sign_outer_event(
+    secret_key: &SecretKey,
+    created_at: Timestamp,
+    kind: Kind,
+    tags: Vec<Tag>,
+    content: String,
+    rng: &mut TestRng,
+) -> Event {
+    sign_event_with_rng(
+        UnsignedEvent::new(public(secret_key), created_at, kind, tags, content),
+        secret_key,
+        rng,
+    )
+    .unwrap()
+}
+
+fn replace_header(sender: &Session, event: &Event, header: Header, rng: &mut TestRng) -> Event {
+    let secret_key = sender
+        .our_current_key
+        .as_ref()
+        .unwrap()
+        .secret_key()
+        .unwrap();
+    let header_key = derive_conversation_key(&secret_key, &sender.their_next_public_key).unwrap();
+    let encrypted_header = encrypt_conversation_key_with_rng(
+        header_key.as_array(),
+        serde_json::to_string(&header).unwrap(),
+        rng,
+    )
+    .unwrap();
+    sign_outer_event(
+        &secret_key,
+        event.created_at,
+        Kind::DoubleRatchetMessage,
+        vec![Tag::parse(["header", encrypted_header.as_str()]).unwrap()],
+        event.content.clone(),
+        rng,
+    )
+}
+
+fn corrupt_base64(value: &str) -> String {
+    let mut bytes = value.as_bytes().to_vec();
+    let index = bytes.len() / 2;
+    bytes[index] = if bytes[index] == b'A' { b'B' } else { b'A' };
+    String::from_utf8(bytes).unwrap()
+}
+
 fn receive(session: &mut Session, event: &Event, rng: &mut TestRng) -> UnsignedEvent {
     session
         .receive_message_with_rng(event, rng)
@@ -194,7 +241,7 @@ fn delayed_message_survives_more_than_two_dh_ratchets() {
 }
 
 #[test]
-fn duplicate_and_tamper_do_not_mutate_state() {
+fn duplicate_and_validly_signed_aead_tamper_do_not_mutate_state() {
     let (mut alice, mut bob, mut alice_rng, mut bob_rng) = session_pair();
     let event = send(&mut alice, "once", &mut alice_rng);
     receive(&mut bob, &event, &mut bob_rng);
@@ -207,14 +254,48 @@ fn duplicate_and_tamper_do_not_mutate_state() {
     );
     assert_eq!(bob.as_json(), after_receive);
 
-    let mut tampered = send(&mut alice, "authentic", &mut alice_rng);
-    tampered.content.push('x');
+    let event = send(&mut alice, "authentic", &mut alice_rng);
+    let sender_secret = alice
+        .our_current_key
+        .as_ref()
+        .unwrap()
+        .secret_key()
+        .unwrap();
     let before_tamper = bob.as_json();
+
+    let tampered_content = sign_outer_event(
+        &sender_secret,
+        event.created_at,
+        event.kind,
+        event.tags.iter().cloned().collect(),
+        corrupt_base64(&event.content),
+        &mut alice_rng,
+    );
+    assert!(validate_outer_event(&tampered_content).is_ok());
     assert!(
-        bob.receive_message_with_rng(&tampered, &mut bob_rng)
+        bob.receive_message_with_rng(&tampered_content, &mut bob_rng)
             .is_err()
     );
     assert_eq!(bob.as_json(), before_tamper);
+
+    let original_header = encrypted_header(&event).unwrap();
+    let tampered_header = corrupt_base64(original_header);
+    let tampered_header = sign_outer_event(
+        &sender_secret,
+        event.created_at,
+        event.kind,
+        vec![Tag::parse(["header", tampered_header.as_str()]).unwrap()],
+        event.content.clone(),
+        &mut alice_rng,
+    );
+    assert!(validate_outer_event(&tampered_header).is_ok());
+    assert!(
+        bob.receive_message_with_rng(&tampered_header, &mut bob_rng)
+            .is_err()
+    );
+    assert_eq!(bob.as_json(), before_tamper);
+
+    assert_eq!(receive(&mut bob, &event, &mut bob_rng).content, "authentic");
 }
 
 #[test]
@@ -242,6 +323,41 @@ fn invalid_inner_rumor_id_is_rejected_atomically() {
         receive(&mut bob, &valid_event, &mut bob_rng).content,
         "valid successor"
     );
+}
+
+#[test]
+fn signed_or_extended_inner_rumors_are_rejected_atomically() {
+    let extra_fields = [
+        ("sig", serde_json::Value::String("00".repeat(64))),
+        ("extension", serde_json::Value::Bool(true)),
+    ];
+
+    for (field, value) in extra_fields {
+        let (mut alice, mut bob, mut alice_rng, mut bob_rng) = session_pair();
+        let mut inner = rumor("strict wire shape");
+        inner.ensure_id();
+        let mut inner = serde_json::to_value(inner).unwrap();
+        inner.as_object_mut().unwrap().insert(field.into(), value);
+        let invalid_event = send_raw_plaintext(
+            &mut alice,
+            &serde_json::to_vec(&inner).unwrap(),
+            &mut alice_rng,
+        );
+
+        let before = bob.as_json();
+        assert!(
+            bob.receive_message_with_rng(&invalid_event, &mut bob_rng)
+                .is_err(),
+            "inner field {field} must be rejected"
+        );
+        assert_eq!(bob.as_json(), before);
+
+        let successor = send(&mut alice, "valid successor", &mut alice_rng);
+        assert_eq!(
+            receive(&mut bob, &successor, &mut bob_rng).content,
+            "valid successor"
+        );
+    }
 }
 
 #[test]
@@ -335,6 +451,97 @@ fn global_skip_limit_accepts_limit_and_rejects_limit_plus_one() {
 }
 
 #[test]
+fn oversized_encoded_header_and_content_are_rejected_atomically() {
+    let (mut alice, mut bob, mut alice_rng, mut bob_rng) = session_pair();
+    let event = send(&mut alice, "bounded", &mut alice_rng);
+    let sender_secret = alice
+        .our_current_key
+        .as_ref()
+        .unwrap()
+        .secret_key()
+        .unwrap();
+    let oversized = "A".repeat(crate::nips::nip44::v2::MAX_ENCODED_PAYLOAD_SIZE + 4);
+    let before = bob.as_json();
+
+    let oversized_header = sign_outer_event(
+        &sender_secret,
+        event.created_at,
+        event.kind,
+        vec![Tag::parse(["header", oversized.as_str()]).unwrap()],
+        event.content.clone(),
+        &mut alice_rng,
+    );
+    assert!(validate_outer_event(&oversized_header).is_ok());
+    assert!(
+        bob.receive_message_with_rng(&oversized_header, &mut bob_rng)
+            .is_err()
+    );
+    assert_eq!(bob.as_json(), before);
+
+    let oversized_content = sign_outer_event(
+        &sender_secret,
+        event.created_at,
+        event.kind,
+        event.tags.iter().cloned().collect(),
+        oversized,
+        &mut alice_rng,
+    );
+    assert!(validate_outer_event(&oversized_content).is_ok());
+    assert!(
+        bob.receive_message_with_rng(&oversized_content, &mut bob_rng)
+            .is_err()
+    );
+    assert_eq!(bob.as_json(), before);
+
+    assert_eq!(receive(&mut bob, &event, &mut bob_rng).content, "bounded");
+}
+
+#[test]
+fn decrypted_headers_require_valid_and_consistent_successor_keys() {
+    let (mut alice, mut bob, mut alice_rng, mut bob_rng) = session_pair();
+    let first = send(&mut alice, "first", &mut alice_rng);
+    let invalid_successor = PublicKey::from_byte_array([0xff; 32]);
+    let invalid_header = replace_header(
+        &alice,
+        &first,
+        Header {
+            number: 0,
+            previous_chain_length: 0,
+            next_public_key: invalid_successor,
+        },
+        &mut alice_rng,
+    );
+    let before = bob.as_json();
+    assert!(
+        bob.receive_message_with_rng(&invalid_header, &mut bob_rng)
+            .is_err()
+    );
+    assert_eq!(bob.as_json(), before);
+    assert_eq!(receive(&mut bob, &first, &mut bob_rng).content, "first");
+
+    let second = send(&mut alice, "second", &mut alice_rng);
+    let unexpected_successor = public(&secret(8));
+    assert_ne!(unexpected_successor, bob.their_next_public_key);
+    let inconsistent_header = replace_header(
+        &alice,
+        &second,
+        Header {
+            number: 1,
+            previous_chain_length: 0,
+            next_public_key: unexpected_successor,
+        },
+        &mut alice_rng,
+    );
+    let before = bob.as_json();
+    assert!(
+        bob.receive_message_with_rng(&inconsistent_header, &mut bob_rng)
+            .is_err()
+    );
+    assert_eq!(bob.as_json(), before);
+    assert_eq!(receive(&mut bob, &second, &mut bob_rng).content, "second");
+}
+
+#[test]
 fn responder_rejects_invalid_xonly_remote_key() {
     let invalid_public_key = PublicKey::from_byte_array([0xff; 32]);
     assert!(Session::new_responder(invalid_public_key, secret(2), [3; 32]).is_err());
@@ -358,37 +565,72 @@ fn decrypts_first_typescript_reference_event() {
 fn outer_event_requires_one_nonempty_header_and_valid_signature() {
     let (mut alice, mut bob, mut alice_rng, mut bob_rng) = session_pair();
     let event = send(&mut alice, "valid", &mut alice_rng);
+    let sender_secret = alice
+        .our_current_key
+        .as_ref()
+        .unwrap()
+        .secret_key()
+        .unwrap();
+    let before = bob.as_json();
 
-    let mut wrong_kind = event.clone();
-    wrong_kind.kind = Kind::TextNote;
-    assert!(
-        bob.receive_message_with_rng(&wrong_kind, &mut bob_rng)
-            .is_err()
+    let wrong_kind = sign_outer_event(
+        &sender_secret,
+        event.created_at,
+        Kind::TextNote,
+        event.tags.iter().cloned().collect(),
+        event.content.clone(),
+        &mut alice_rng,
     );
-
-    let unsigned = UnsignedEvent::new(
-        event.pubkey,
+    let missing_header = sign_outer_event(
+        &sender_secret,
+        event.created_at,
+        Kind::DoubleRatchetMessage,
+        Vec::new(),
+        event.content.clone(),
+        &mut alice_rng,
+    );
+    let empty_header = sign_outer_event(
+        &sender_secret,
+        event.created_at,
+        Kind::DoubleRatchetMessage,
+        vec![Tag::parse(["header", ""]).unwrap()],
+        event.content.clone(),
+        &mut alice_rng,
+    );
+    let duplicate_header = sign_outer_event(
+        &sender_secret,
         event.created_at,
         Kind::DoubleRatchetMessage,
         vec![
             Tag::parse(["header", "one"]).unwrap(),
             Tag::parse(["header", "two"]).unwrap(),
         ],
-        event.content,
-    );
-    let duplicate_header = sign_event_with_rng(
-        unsigned,
-        &alice
-            .our_current_key
-            .as_ref()
-            .unwrap()
-            .secret_key()
-            .unwrap(),
+        event.content.clone(),
         &mut alice_rng,
-    )
-    .unwrap();
-    assert!(
-        bob.receive_message_with_rng(&duplicate_header, &mut bob_rng)
-            .is_err()
     );
+    let wrong_sender_secret = secret(8);
+    let wrong_sender = sign_outer_event(
+        &wrong_sender_secret,
+        event.created_at,
+        Kind::DoubleRatchetMessage,
+        event.tags.iter().cloned().collect(),
+        event.content.clone(),
+        &mut alice_rng,
+    );
+
+    for invalid_event in [
+        &wrong_kind,
+        &missing_header,
+        &empty_header,
+        &duplicate_header,
+        &wrong_sender,
+    ] {
+        assert!(
+            bob.receive_message_with_rng(invalid_event, &mut bob_rng)
+                .is_err()
+        );
+        assert_eq!(bob.as_json(), before);
+    }
+
+    assert_eq!(receive(&mut bob, &event, &mut bob_rng).content, "valid");
 }

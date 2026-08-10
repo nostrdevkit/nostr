@@ -15,11 +15,12 @@
 //!
 //! # Workflow
 //!
-//! The inviter creates and stores an owned [`Invite`], then shares a private URL or signs and
-//! publishes its public invite event. The invitee parses it and calls [`Invite::accept_with_rng`],
-//! stores the returned session with the response event, and publishes that event. After applying
-//! replay and invite-use policy, the inviter calls [`Invite::process_response`]. The invitee is
-//! the session initiator and sends the first kind `1060` message.
+//! The inviter creates and stores an owned [`Invite`], then shares a private URL through an
+//! authenticated channel or signs and publishes its public invite event. The invitee parses it and
+//! calls [`Invite::accept_with_rng`], stores the returned session with the response event, and
+//! publishes that event. After applying replay and invite-use policy, the inviter calls
+//! [`Invite::process_response`]. The invitee is the session initiator and sends the first kind
+//! `1060` message.
 
 mod invite;
 mod wire;
@@ -40,8 +41,10 @@ const INVITE_RESPONSE_TIMESTAMP_WINDOW: u64 = 2 * 24 * 60 * 60;
 /// process a response. A private invite URL is sensitive capability material,
 /// while a published invite event exposes its shared secret publicly.
 ///
-/// The serialized representation of an owned invite contains both the
-/// ephemeral secret key and the shared secret and must be stored securely.
+/// The serialized representation of an owned invite contains both the ephemeral secret key and
+/// the shared secret and must be stored securely. A later compromise of both a retained invite and
+/// the inviter identity key can decrypt archived responses and reconstruct their initial responder
+/// sessions. Deleting expired or consumed invite secrets limits that exposure.
 #[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Invite {
@@ -71,7 +74,8 @@ pub struct InviteAcceptance {
 pub struct InviteResponse {
     /// The inviter's initialized NIP-117 session.
     pub session: Session,
-    /// The authenticated Nostr identity of the invitee.
+    /// The authenticated Nostr identity of the invitee, cryptographically bound to the session's
+    /// initial key by the response proof.
     pub invitee_identity: PublicKey,
 }
 

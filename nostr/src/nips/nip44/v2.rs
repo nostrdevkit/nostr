@@ -32,7 +32,7 @@ const MAX_SUPPORTED_PLAINTEXT_SIZE: usize = 65_536 - 128;
 const MAX_CIPHERTEXT_SIZE: usize = LENGTH_PREFIX_SIZE + calc_padding(MAX_SUPPORTED_PLAINTEXT_SIZE);
 pub(super) const MAX_PAYLOAD_SIZE: usize =
     VERSION_SIZE + NONCE_SIZE + MAX_CIPHERTEXT_SIZE + HMAC_SIZE;
-pub(super) const MAX_ENCODED_PAYLOAD_SIZE: usize = MAX_PAYLOAD_SIZE.div_ceil(3) * 4;
+pub(crate) const MAX_ENCODED_PAYLOAD_SIZE: usize = MAX_PAYLOAD_SIZE.div_ceil(3) * 4;
 
 const MESSAGE_KEYS_SIZE: usize = 76;
 const MESSAGES_KEYS_ENCRYPTION_SIZE: usize = 32;
@@ -210,6 +210,12 @@ pub fn decrypt_to_bytes(
     if len > MAX_PAYLOAD_SIZE {
         return Err(ErrorV2::MessageTooLong.into());
     }
+    if payload.first() != Some(&2) {
+        return Err(Error::with_static_message(
+            ErrorKind::Unsupported,
+            "unsupported NIP-44 payload version",
+        ));
+    }
 
     // Extract nonce, buffer and hmac from payload
     let nonce: &[u8] = payload
@@ -230,7 +236,7 @@ pub fn decrypt_to_bytes(
     engine.input(nonce);
     engine.input(buffer);
     let calculated_mac: [u8; HMAC_SIZE] = engine.finalize().to_byte_array();
-    if mac != calculated_mac.as_slice() {
+    if !bitcoin_hashes::cmp::fixed_time_eq(mac, &calculated_mac) {
         return Err(ErrorV2::InvalidHmac.into());
     }
 
@@ -526,6 +532,17 @@ mod tests {
                 i
             );
         }
+    }
+
+    #[test]
+    fn raw_decrypt_rejects_an_unsupported_version() {
+        let conversation_key = ConversationKey::new([1; 32]);
+        let mut payload =
+            encrypt_to_bytes_with_nonce(&conversation_key, b"message", [2; 32]).unwrap();
+        payload[0] = 3;
+
+        let err = decrypt_to_bytes(&conversation_key, &payload).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Unsupported);
     }
 
     #[test]

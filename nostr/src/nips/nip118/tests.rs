@@ -2,6 +2,7 @@
 // Copyright (c) 2023-2025 Rust Nostr Developers
 // Distributed under the MIT software license
 
+use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::convert::Infallible;
 
@@ -9,12 +10,16 @@ use rand::rngs::Xoshiro256PlusPlus;
 use rand::{SeedableRng, TryCryptoRng, TryRng};
 use secp256k1::Secp256k1;
 
-use super::wire::{parse_response_session_key, validate_response_tags};
+use super::wire::{
+    InviteResponsePayload, MAX_INVITE_URL_LENGTH, parse_response_payload, session_proof_digest,
+    validate_response_tags, verify_session_proof,
+};
 use super::{INVITE_RESPONSE_TIMESTAMP_WINDOW, Invite};
 use crate::error::ErrorKind;
-use crate::event::{Event, Kind, Tag, UnsignedEvent};
+use crate::event::{Event, Kind, Signature, Tag, UnsignedEvent};
 use crate::key::{Keys, PublicKey, SecretKey};
-use crate::nips::nip117::sign_event_with_rng;
+use crate::nips::nip44::{self, Version};
+use crate::nips::nip117::{encrypt_conversation_key_with_rng, sign_event_with_rng};
 use crate::types::Timestamp;
 
 struct TestRng(Xoshiro256PlusPlus);
@@ -57,6 +62,26 @@ fn owned_invite(inviter: &Keys) -> Invite {
         [5; 32],
     )
     .unwrap()
+}
+
+fn wrap_response_rumor(invite: &Invite, rumor_json: &str, rng: &mut TestRng) -> Event {
+    let one_use_keys = keys(9);
+    let content = nip44::encrypt_with_rng(
+        one_use_keys.secret_key(),
+        &invite.inviter_ephemeral_public_key(),
+        rumor_json,
+        Version::V2,
+        rng,
+    )
+    .unwrap();
+    let unsigned = UnsignedEvent::new(
+        one_use_keys.public_key(),
+        Timestamp::from_secs(100),
+        Kind::GiftWrap,
+        [Tag::parse(["p", &invite.inviter_ephemeral_public_key().to_hex()]).unwrap()],
+        content,
+    );
+    sign_event_with_rng(unsigned, one_use_keys.secret_key(), rng).unwrap()
 }
 
 #[test]
@@ -128,6 +153,25 @@ fn url_and_event_roundtrip() {
         event.tags[3].content(),
         Some(faster_hex::hex_string(&[5; 32]).as_str())
     );
+}
+
+#[test]
+fn url_parser_bounds_untrusted_input() {
+    let invite = owned_invite(&keys(1));
+    let url = invite.to_url("https://example.com/").unwrap();
+    let fragment = url.split_once('#').unwrap().1;
+    let fixed_len = "https://example.com/".len() + 1 + fragment.len();
+    let padding = "a".repeat(MAX_INVITE_URL_LENGTH - fixed_len);
+    let boundary = format!("https://example.com/{padding}#{fragment}");
+    assert_eq!(boundary.len(), MAX_INVITE_URL_LENGTH);
+    assert!(Invite::from_url(&boundary).is_ok());
+
+    let oversized = format!("https://example.com/{padding}a#{fragment}");
+    assert_eq!(oversized.len(), MAX_INVITE_URL_LENGTH + 1);
+    assert!(Invite::from_url(&oversized).is_err());
+
+    let oversized_root = format!("https://example.com/{}", "a".repeat(MAX_INVITE_URL_LENGTH));
+    assert!(invite.to_url(oversized_root).is_err());
 }
 
 #[test]
@@ -295,22 +339,280 @@ fn response_rejects_wrong_keys_tampering_and_public_only_invite() {
 }
 
 #[test]
-fn response_payload_accepts_deployed_extension_and_legacy_plaintext() {
+fn response_rejects_oversized_content_before_decryption() {
+    let inviter = keys(1);
+    let invite = owned_invite(&inviter);
+    let one_use_keys = keys(9);
+    let oversized = "A".repeat(crate::nips::nip44::v2::MAX_ENCODED_PAYLOAD_SIZE + 4);
+    let unsigned = UnsignedEvent::new(
+        one_use_keys.public_key(),
+        Timestamp::from_secs(100),
+        Kind::GiftWrap,
+        [Tag::parse(["p", &invite.inviter_ephemeral_public_key().to_hex()]).unwrap()],
+        oversized,
+    );
+    let mut rng = TestRng::new(43);
+    let response = sign_event_with_rng(unsigned, one_use_keys.secret_key(), &mut rng).unwrap();
+
+    assert!(
+        invite
+            .process_response(&response, inviter.secret_key())
+            .is_err()
+    );
+}
+
+#[test]
+fn response_rumor_rejects_signed_and_unknown_fields() {
+    let inviter = keys(1);
+    let invitee = keys(3);
+    let invite = owned_invite(&inviter);
+    let mut rng = TestRng::new(40);
+    let acceptance = invite
+        .accept_with_rng(&invitee, Timestamp::from_secs(100), &mut rng)
+        .unwrap();
+    let rumor_json = nip44::decrypt(
+        invite.inviter_ephemeral_secret_key().unwrap(),
+        &acceptance.response_event.pubkey,
+        &acceptance.response_event.content,
+    )
+    .unwrap();
+
+    for (field, value) in [
+        (
+            "sig",
+            serde_json::Value::String(acceptance.response_event.sig.to_hex()),
+        ),
+        ("unexpected", serde_json::Value::Bool(true)),
+    ] {
+        let mut rumor: serde_json::Value = serde_json::from_str(&rumor_json).unwrap();
+        rumor[field] = value;
+        let response = wrap_response_rumor(&invite, &rumor.to_string(), &mut rng);
+        assert!(
+            invite
+                .process_response(&response, inviter.secret_key())
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn session_proof_binds_all_context_and_requires_session_secret() {
+    let inviter_identity = keys(1);
+    let inviter_ephemeral = keys(2);
+    let invitee_identity = keys(3);
+    let session_keys = keys(4);
+    let shared_secret = [5; 32];
+    let mut rng = TestRng::new(41);
+    let digest = session_proof_digest(
+        inviter_identity.public_key(),
+        inviter_ephemeral.public_key(),
+        invitee_identity.public_key(),
+        session_keys.public_key(),
+        &shared_secret,
+    );
+    assert_eq!(
+        faster_hex::hex_string(&digest),
+        "e7d5fbafa8806383fd0f4a6db7f29eb87876560575659e8b30e3794706e8465a"
+    );
+    let proof = session_keys.sign_schnorr_with_rng(&Secp256k1::signing_only(), digest, &mut rng);
+    let payload = InviteResponsePayload {
+        session_key: session_keys.public_key(),
+        session_proof: proof,
+    };
+    assert!(
+        verify_session_proof(
+            &payload,
+            inviter_identity.public_key(),
+            inviter_ephemeral.public_key(),
+            invitee_identity.public_key(),
+            &shared_secret,
+        )
+        .is_ok()
+    );
+
+    assert!(
+        verify_session_proof(
+            &payload,
+            keys(6).public_key(),
+            inviter_ephemeral.public_key(),
+            invitee_identity.public_key(),
+            &shared_secret,
+        )
+        .is_err()
+    );
+    assert!(
+        verify_session_proof(
+            &payload,
+            inviter_identity.public_key(),
+            keys(6).public_key(),
+            invitee_identity.public_key(),
+            &shared_secret,
+        )
+        .is_err()
+    );
+    assert!(
+        verify_session_proof(
+            &payload,
+            inviter_identity.public_key(),
+            inviter_ephemeral.public_key(),
+            keys(6).public_key(),
+            &shared_secret,
+        )
+        .is_err()
+    );
+    let changed_session_payload = InviteResponsePayload {
+        session_key: keys(6).public_key(),
+        session_proof: proof,
+    };
+    assert!(
+        verify_session_proof(
+            &changed_session_payload,
+            inviter_identity.public_key(),
+            inviter_ephemeral.public_key(),
+            invitee_identity.public_key(),
+            &shared_secret,
+        )
+        .is_err()
+    );
+    assert!(
+        verify_session_proof(
+            &payload,
+            inviter_identity.public_key(),
+            inviter_ephemeral.public_key(),
+            invitee_identity.public_key(),
+            &[6; 32],
+        )
+        .is_err()
+    );
+    let mut changed_proof = proof.to_bytes();
+    changed_proof[0] ^= 1;
+    let changed_proof_payload = InviteResponsePayload {
+        session_key: session_keys.public_key(),
+        session_proof: Signature::from_byte_array(changed_proof),
+    };
+    assert!(
+        verify_session_proof(
+            &changed_proof_payload,
+            inviter_identity.public_key(),
+            inviter_ephemeral.public_key(),
+            invitee_identity.public_key(),
+            &shared_secret,
+        )
+        .is_err()
+    );
+
+    // An attacker can observe the session public key and sign a transcript for their own identity,
+    // but a signature made with any other secret cannot prove ownership of that observed key.
+    let attacker_identity = keys(7);
+    let attacker_signer = keys(8);
+    let forged_digest = session_proof_digest(
+        inviter_identity.public_key(),
+        inviter_ephemeral.public_key(),
+        attacker_identity.public_key(),
+        session_keys.public_key(),
+        &shared_secret,
+    );
+    let forged_payload = InviteResponsePayload {
+        session_key: session_keys.public_key(),
+        session_proof: attacker_signer.sign_schnorr_with_rng(
+            &Secp256k1::signing_only(),
+            forged_digest,
+            &mut rng,
+        ),
+    };
+    assert!(
+        verify_session_proof(
+            &forged_payload,
+            inviter_identity.public_key(),
+            inviter_ephemeral.public_key(),
+            attacker_identity.public_key(),
+            &shared_secret,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn response_rejects_identity_claiming_observed_session_key_without_secret() {
+    let inviter_identity = keys(1);
+    let honest_invitee = keys(3);
+    let attacker_identity = keys(7);
+    let wrong_session_signer = keys(8);
+    let invite = owned_invite(&inviter_identity);
+    let mut rng = TestRng::new(42);
+    let acceptance = invite
+        .accept_with_rng(&honest_invitee, Timestamp::from_secs(100), &mut rng)
+        .unwrap();
+    let observed_session_key = acceptance.session.current_public_key().unwrap();
+
+    let digest = session_proof_digest(
+        inviter_identity.public_key(),
+        invite.inviter_ephemeral_public_key(),
+        attacker_identity.public_key(),
+        observed_session_key,
+        invite.shared_secret(),
+    );
+    let forged_payload = InviteResponsePayload {
+        session_key: observed_session_key,
+        session_proof: wrong_session_signer.sign_schnorr_with_rng(
+            &Secp256k1::signing_only(),
+            digest,
+            &mut rng,
+        ),
+    };
+    let identity_encrypted = nip44::encrypt_with_rng(
+        attacker_identity.secret_key(),
+        &inviter_identity.public_key(),
+        serde_json::to_string(&forged_payload).unwrap(),
+        Version::V2,
+        &mut rng,
+    )
+    .unwrap();
+    let content =
+        encrypt_conversation_key_with_rng(invite.shared_secret(), identity_encrypted, &mut rng)
+            .unwrap();
+    let mut rumor = UnsignedEvent::new(
+        attacker_identity.public_key(),
+        Timestamp::from_secs(100),
+        Kind::DoubleRatchetMessage,
+        Vec::<Tag>::new(),
+        content,
+    );
+    rumor.ensure_id();
+    let response = wrap_response_rumor(&invite, &serde_json::to_string(&rumor).unwrap(), &mut rng);
+
+    assert!(
+        invite
+            .process_response(&response, inviter_identity.secret_key())
+            .is_err()
+    );
+}
+
+#[test]
+fn response_payload_requires_proof_but_allows_extensions() {
     let session_key = keys(6).public_key();
+    let proof = Signature::from_byte_array([7; 64]);
+    let payload = format!(r#"{{"sessionKey":"{session_key}","sessionProof":"{proof}"}}"#);
+    assert_eq!(
+        parse_response_payload(&payload).unwrap().session_key,
+        session_key
+    );
+
+    let proofless = format!(r#"{{"sessionKey":"{session_key}"}}"#);
+    assert!(parse_response_payload(&proofless).is_err());
+    assert!(parse_response_payload(&session_key.to_hex()).is_err());
     let extended = format!(
-        r#"{{"sessionKey":"{}","ownerPublicKey":"{}"}}"#,
-        session_key,
+        r#"{{"sessionKey":"{session_key}","sessionProof":"{proof}","ownerPublicKey":"{}"}}"#,
         keys(8).public_key()
     );
-    assert_eq!(parse_response_session_key(&extended).unwrap(), session_key);
     assert_eq!(
-        parse_response_session_key(&session_key.to_hex()).unwrap(),
+        parse_response_payload(&extended).unwrap().session_key,
         session_key
     );
 }
 
 #[test]
-fn processes_typescript_invite_response_vector() {
+fn processes_proof_bearing_typescript_invite_response_vector() {
     let inviter = Keys::new_with_ctx(
         &Secp256k1::signing_only(),
         SecretKey::from_hex("1111111111111111111111111111111111111111111111111111111111111111")
@@ -337,7 +639,7 @@ fn processes_typescript_invite_response_vector() {
     assert!(
         response.session.remote_public_keys().contains(
             &PublicKey::from_hex(
-                "41e59453e9f97f8495c9e32ddee73f52ed8dd6f5c00f83d88737762b251469ac"
+                "0e47314393a07008e3a800d98122d516cc1213e990534dbe88ca81f078d911f1"
             )
             .unwrap()
         )

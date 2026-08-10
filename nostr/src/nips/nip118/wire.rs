@@ -4,19 +4,22 @@
 
 use alloc::string::{String, ToString};
 
+use bitcoin_hashes::{HashEngine, sha256};
 use secp256k1::Secp256k1;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use super::Invite;
 use crate::error::{Error, ErrorKind};
-use crate::event::{Event, Kind, Tag, UnsignedEvent};
+use crate::event::{Event, Kind, Signature, Tag, UnsignedEvent};
 use crate::key::{PublicKey, SecretKey};
 use crate::types::Timestamp;
 use crate::types::url::{Url, form_urlencoded};
 
 const INVITE_TAG_PREFIX: &str = "double-ratchet/invites/";
 const INVITE_LABEL: &str = "double-ratchet/invites";
+const SESSION_PROOF_DOMAIN: &[u8] = b"NIP-118/session-proof/v1";
+pub(super) const MAX_INVITE_URL_LENGTH: usize = 4096;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -88,13 +91,16 @@ impl Drop for InviteUrlData {
 #[serde(rename_all = "camelCase")]
 pub(super) struct InviteResponsePayload {
     pub(super) session_key: PublicKey,
+    pub(super) session_proof: Signature,
 }
 
 impl Invite {
     /// Encode this invite in the fragment of an absolute URL.
     ///
-    /// The fragment contains the shared secret. Although fragments are not
-    /// normally sent to the web server, the complete URL is sensitive.
+    /// The fragment contains the shared secret. Although fragments are not normally sent to the
+    /// web server, the complete URL is sensitive. Deliver private invite URLs through a channel
+    /// that authenticates the inviter; the URL itself is unsigned and accepting it reveals the
+    /// invitee's identity to whoever controls the invite.
     pub fn to_url<S>(&self, root: S) -> Result<String, Error>
     where
         S: AsRef<str>,
@@ -108,15 +114,25 @@ impl Invite {
         let encoded: String = form_urlencoded::byte_serialize(json.as_bytes()).collect();
         let mut url = Url::parse(root.as_ref()).map_err(Error::malformed)?;
         url.set_fragment(Some(&encoded));
-        Ok(url.to_string())
+        let url = url.to_string();
+        if url.len() > MAX_INVITE_URL_LENGTH {
+            return Err(invalid("invite URL is too large"));
+        }
+        Ok(url)
     }
 
     /// Parse an acceptor-side invite from a URL fragment.
+    ///
+    /// This rejects URLs larger than 4096 bytes before parsing to bound work on untrusted input.
     pub fn from_url<S>(url: S) -> Result<Self, Error>
     where
         S: AsRef<str>,
     {
-        let url = Url::parse(url.as_ref()).map_err(Error::malformed)?;
+        let input = url.as_ref();
+        if input.len() > MAX_INVITE_URL_LENGTH {
+            return Err(invalid("invite URL is too large"));
+        }
+        let url = Url::parse(input).map_err(Error::malformed)?;
         let fragment = url
             .fragment()
             .filter(|value| !value.is_empty())
@@ -282,13 +298,56 @@ pub(super) fn validate_response_rumor(rumor: &UnsignedEvent) -> Result<(), Error
     validate_public_key(rumor.pubkey, "invalid invitee identity public key")
 }
 
-pub(super) fn parse_response_session_key(payload: &str) -> Result<PublicKey, Error> {
-    let session_key = match serde_json::from_str::<InviteResponsePayload>(payload) {
-        Ok(payload) => payload.session_key,
-        Err(_) => PublicKey::from_hex(payload)?,
-    };
-    validate_public_key(session_key, "invalid invitee session public key")?;
-    Ok(session_key)
+pub(super) fn parse_response_payload(payload: &str) -> Result<InviteResponsePayload, Error> {
+    let payload: InviteResponsePayload = serde_json::from_str(payload)?;
+    validate_public_key(payload.session_key, "invalid invitee session public key")?;
+    Ok(payload)
+}
+
+/// Hash the canonical NIP-118 session-key proof transcript.
+///
+/// The preimage is the ASCII domain `NIP-118/session-proof/v1`, followed by five fixed-width
+/// 32-byte values in this order: inviter identity x-only public key, inviter ephemeral x-only
+/// public key, invitee identity x-only public key, invitee session x-only public key, and shared
+/// secret. No separators or text encodings are present.
+pub(super) fn session_proof_digest(
+    inviter_identity: PublicKey,
+    inviter_ephemeral: PublicKey,
+    invitee_identity: PublicKey,
+    session_key: PublicKey,
+    shared_secret: &[u8; 32],
+) -> [u8; 32] {
+    let mut engine = sha256::Hash::engine();
+    engine.input(SESSION_PROOF_DOMAIN);
+    engine.input(inviter_identity.as_bytes());
+    engine.input(inviter_ephemeral.as_bytes());
+    engine.input(invitee_identity.as_bytes());
+    engine.input(session_key.as_bytes());
+    engine.input(shared_secret);
+    engine.finalize().to_byte_array()
+}
+
+pub(super) fn verify_session_proof(
+    payload: &InviteResponsePayload,
+    inviter_identity: PublicKey,
+    inviter_ephemeral: PublicKey,
+    invitee_identity: PublicKey,
+    shared_secret: &[u8; 32],
+) -> Result<(), Error> {
+    let session_key = payload
+        .session_key
+        .xonly()
+        .map_err(|_| invalid("invalid invitee session public key"))?;
+    let digest = session_proof_digest(
+        inviter_identity,
+        inviter_ephemeral,
+        invitee_identity,
+        payload.session_key,
+        shared_secret,
+    );
+    Secp256k1::verification_only()
+        .verify_schnorr(payload.session_proof.as_secp256k1(), &digest, &session_key)
+        .map_err(|_| invalid("invalid invite session proof"))
 }
 
 pub(super) fn validate_public_key(
@@ -318,7 +377,8 @@ pub(super) mod serde_shared_secret {
     where
         S: Serializer,
     {
-        serializer.serialize_str(&faster_hex::hex_string(secret))
+        let encoded = Zeroizing::new(faster_hex::hex_string(secret));
+        serializer.serialize_str(&encoded)
     }
 
     pub(in crate::nips::nip118) fn deserialize<'de, D>(
@@ -327,8 +387,10 @@ pub(super) mod serde_shared_secret {
     where
         D: Deserializer<'de>,
     {
-        let encoded = String::deserialize(deserializer)?;
-        crate::util::hex_decode(&encoded).map_err(serde::de::Error::custom)
+        let mut encoded = String::deserialize(deserializer)?;
+        let decoded = crate::util::hex_decode(&encoded).map_err(serde::de::Error::custom);
+        encoded.zeroize();
+        decoded
     }
 }
 
@@ -343,7 +405,10 @@ pub(super) mod serde_optional_secret_key {
         S: Serializer,
     {
         match secret {
-            Some(secret) => serializer.serialize_some(&secret.to_secret_hex()),
+            Some(secret) => {
+                let encoded = Zeroizing::new(secret.to_secret_hex());
+                serializer.serialize_some(encoded.as_str())
+            }
             None => serializer.serialize_none(),
         }
     }
@@ -355,7 +420,11 @@ pub(super) mod serde_optional_secret_key {
         D: Deserializer<'de>,
     {
         Option::<String>::deserialize(deserializer)?
-            .map(|secret| SecretKey::from_hex(&secret).map_err(serde::de::Error::custom))
+            .map(|mut secret| {
+                let decoded = SecretKey::from_hex(&secret).map_err(serde::de::Error::custom);
+                secret.zeroize();
+                decoded
+            })
             .transpose()
     }
 }
