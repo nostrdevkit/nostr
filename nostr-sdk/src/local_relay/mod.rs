@@ -232,4 +232,50 @@ mod tests {
             output.failed.values().next().unwrap()
         );
     }
+
+    #[tokio::test]
+    async fn test_max_query_results() {
+        let relay = LocalRelay::builder()
+            .database(MemoryDatabase::unbounded())
+            .max_query_results(6)
+            .build();
+        relay.run().await.unwrap();
+
+        let keys = Keys::generate();
+        let client = Client::default();
+
+        client
+            .add_relay(relay.url().await)
+            .and_connect()
+            .await
+            .unwrap();
+
+        for i in 0..10 {
+            client
+                .send_event(
+                    &EventBuilder::new(
+                        if i % 2 == 1 {
+                            Kind::TextNote
+                        } else {
+                            Kind::Comment
+                        },
+                        i.to_string(),
+                    )
+                    .finalize(&keys)
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+        }
+
+        let result = client
+            .fetch_events([
+                Filter::new().kind(Kind::TextNote),
+                Filter::new().kind(Kind::Comment),
+            ])
+            .await
+            .unwrap();
+
+        assert_eq!(6, result.len(), "max_query_results is 6");
+    }
 }

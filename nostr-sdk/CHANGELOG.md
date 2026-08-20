@@ -27,6 +27,12 @@
 
 -->
 
+## Unreleased
+
+### Changed
+
+- local_relay: improve `max_query_results` handling (https://github.com/nostrdevkit/nostr/pull/1457)
+
 ## v0.45.2 - 2026/08/19
 
 ### Fixed
