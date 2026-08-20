@@ -27,6 +27,12 @@
 
 -->
 
+## Unreleased
+
+### Added
+
+- Support NIP-44 v2 payloads up to 2^32 - 1 plaintext bytes
+
 ## v0.45.3 - 2026/08/19
 
 ### Fixed

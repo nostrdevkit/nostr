@@ -36,13 +36,13 @@ impl Version {
         *self as u8
     }
 
-    fn max_encoded_payload_size(self) -> usize {
+    fn max_encoded_payload_size(self) -> u64 {
         match self {
             Self::V2 => v2::MAX_ENCODED_PAYLOAD_SIZE,
         }
     }
 
-    fn validate_encoded_payload_size(self, len: usize) -> Result<(), Error> {
+    fn validate_encoded_payload_size(self, len: u64) -> Result<(), Error> {
         if len > self.max_encoded_payload_size() {
             return Err(Error::with_static_message(
                 ErrorKind::Invalid,
@@ -52,6 +52,25 @@ impl Version {
 
         Ok(())
     }
+}
+
+fn unsupported_platform_size() -> Error {
+    Error::with_static_message(
+        ErrorKind::Unsupported,
+        "NIP-44 payload size is not supported on this platform",
+    )
+}
+
+fn allocation_failed() -> Error {
+    Error::with_static_message(ErrorKind::Other, "failed to allocate NIP-44 payload buffer")
+}
+
+fn supported_allocation_size(len: usize) -> Result<usize, Error> {
+    if len > isize::MAX as usize {
+        return Err(unsupported_platform_size());
+    }
+
+    Ok(len)
 }
 
 fn decode_payload_version(payload: &[u8]) -> Result<Version, Error> {
@@ -144,7 +163,16 @@ where
     T: AsRef<[u8]>,
 {
     let payload: Vec<u8> = encrypt_to_bytes_with_nonce(secret_key, public_key, content, nonce)?;
-    Ok(general_purpose::STANDARD.encode(payload))
+    let encoded_len: usize = base64::encoded_len(payload.len(), true)
+        .ok_or_else(unsupported_platform_size)
+        .and_then(supported_allocation_size)?;
+
+    let mut encoded: String = String::new();
+    encoded
+        .try_reserve_exact(encoded_len)
+        .map_err(|_| allocation_failed())?;
+    general_purpose::STANDARD.encode_string(payload, &mut encoded);
+    Ok(encoded)
 }
 
 /// Encrypt to bytes (**not base64 encoded!**)
@@ -169,6 +197,11 @@ where
 }
 
 /// Decrypt
+///
+/// NIP-44 permits payloads containing up to [`u32::MAX`] plaintext bytes.
+/// Decrypting payloads near that limit requires several gigabytes of contiguous
+/// memory. Applications should enforce a smaller encoded-payload limit when
+/// processing untrusted events on resource-constrained systems.
 #[inline]
 pub fn decrypt<T>(
     secret_key: &SecretKey,
@@ -183,6 +216,11 @@ where
 }
 
 /// Decrypt **without** converting bytes to UTF-8 string
+///
+/// NIP-44 permits payloads containing up to [`u32::MAX`] plaintext bytes.
+/// Decrypting payloads near that limit requires several gigabytes of contiguous
+/// memory. Applications should enforce a smaller encoded-payload limit when
+/// processing untrusted events on resource-constrained systems.
 pub fn decrypt_to_bytes<T>(
     secret_key: &SecretKey,
     public_key: &PublicKey,
@@ -193,18 +231,24 @@ where
 {
     let payload = payload.as_ref();
     let version = decode_payload_version(payload)?;
-    version.validate_encoded_payload_size(payload.len())?;
+    version.validate_encoded_payload_size(payload.len() as u64)?;
 
     // Decode base64 payload
-    let payload: Vec<u8> = general_purpose::STANDARD
-        .decode(payload)
+    let decoded_len: usize =
+        supported_allocation_size(base64::decoded_len_estimate(payload.len()))?;
+    let mut decoded: Vec<u8> = Vec::new();
+    decoded
+        .try_reserve_exact(decoded_len)
+        .map_err(|_| allocation_failed())?;
+    general_purpose::STANDARD
+        .decode_vec(payload, &mut decoded)
         .map_err(Error::malformed_display)?;
 
     match version {
         Version::V2 => {
             let conversation_key: ConversationKey =
                 ConversationKey::derive(secret_key, public_key)?;
-            v2::decrypt_to_bytes(&conversation_key, &payload)
+            v2::decrypt_to_bytes(&conversation_key, &decoded)
         }
     }
 }
@@ -244,12 +288,24 @@ mod tests {
 
     #[test]
     fn test_oversized_base64_payload_is_rejected_before_decoding() {
-        let keys = Keys::generate();
-        let mut payload = vec![b'A'; v2::MAX_ENCODED_PAYLOAD_SIZE + 1];
-        payload[..4].copy_from_slice(b"AgAA");
-
-        let err = decrypt_to_bytes(keys.secret_key(), &keys.public_key(), payload).unwrap_err();
+        let err = Version::V2
+            .validate_encoded_payload_size(v2::MAX_ENCODED_PAYLOAD_SIZE + 1)
+            .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Invalid);
         assert_eq!(err.to_string(), "message too long");
+    }
+
+    #[test]
+    fn test_allocation_errors() {
+        let err = supported_allocation_size(usize::MAX).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Unsupported);
+        assert_eq!(
+            err.to_string(),
+            "NIP-44 payload size is not supported on this platform"
+        );
+
+        let err = allocation_failed();
+        assert_eq!(err.kind(), ErrorKind::Other);
+        assert_eq!(err.to_string(), "failed to allocate NIP-44 payload buffer");
     }
 }
