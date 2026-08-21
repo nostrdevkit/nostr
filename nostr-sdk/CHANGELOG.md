@@ -27,6 +27,13 @@
 
 -->
 
+
+## Unreleased
+
+### Added
+
+- local_relay: add `LocalRelay::connections_left` (https://github.com/nostrdevkit/nostr/pull/1459)
+
 ## v0.45.2 - 2026/08/19
 
 ### Fixed

@@ -59,7 +59,7 @@ pub(super) struct InnerLocalRelay {
     auth_events_per_minute: u32,
     messages_per_minute: u32,
     pending_handshakes_limit: Arc<Semaphore>,
-    connections_limit: Arc<Semaphore>,
+    pub(crate) connections_limit: Arc<Semaphore>,
     max_websocket_message_size: usize,
     max_event_size: usize,
     websocket_handshake_timeout: Duration,
