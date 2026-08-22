@@ -316,6 +316,9 @@ impl InnerLocalRelay {
             tokio::time::sleep(unresponsive_connection).await;
         }
 
+        // Take the connection permit before doing the handshake
+        let conn_permit = self.connections_limit.clone().try_acquire_owned()?;
+
         // Bound clients that open TCP but never complete the WebSocket handshake.
         let ws_stream = tokio::time::timeout(
             self.websocket_handshake_timeout,
@@ -330,10 +333,7 @@ impl InnerLocalRelay {
         // The pre-handshake socket is no longer consuming admission resources.
         drop(permit);
 
-        // An established connection only consumes a permit when explicitly configured.
-        let permit = self.connections_limit.clone().try_acquire_owned()?;
-
-        self.handle_websocket(ws_stream, addr, permit).await?;
+        self.handle_websocket(ws_stream, addr, conn_permit).await?;
 
         Ok(())
     }
