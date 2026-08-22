@@ -113,9 +113,7 @@ impl InnerLocalRelay {
             auth_events_per_minute: builder.auth_events_per_minute,
             messages_per_minute: builder.messages_per_minute,
             pending_handshakes_limit: Arc::new(Semaphore::new(DEFAULT_MAX_PENDING_HANDSHAKES)),
-            connections_limit: Arc::new(Semaphore::new(
-                builder.max_connections.unwrap_or(Semaphore::MAX_PERMITS),
-            )),
+            connections_limit: Arc::new(Semaphore::new(builder.max_connections)),
             max_websocket_message_size: builder.max_websocket_message_size,
             max_event_size: builder.max_event_size,
             websocket_handshake_timeout: builder.websocket_handshake_timeout,
@@ -1655,6 +1653,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::local_relay::DEFAULT_CONNECTIONS_LIMIT;
 
     #[derive(Debug)]
     struct RejectWrites;
@@ -1714,7 +1713,7 @@ mod tests {
         assert_eq!(relay.pending_handshakes_limit.available_permits(), 128);
         assert_eq!(
             relay.connections_limit.available_permits(),
-            Semaphore::MAX_PERMITS
+            DEFAULT_CONNECTIONS_LIMIT
         );
         assert_eq!(relay.queries_per_minute, 1_200);
         assert_eq!(relay.auth_events_per_minute, 30);
