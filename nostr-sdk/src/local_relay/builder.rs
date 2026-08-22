@@ -19,7 +19,6 @@ use super::local::LocalRelay;
 pub(super) const DEFAULT_MAX_PENDING_HANDSHAKES: usize = 128;
 pub(super) const DEFAULT_MAX_FILTERS_PER_REQ: usize = 20;
 pub(super) const DEFAULT_MAX_EVENT_SIZE: usize = 64 * 1024;
-pub(super) const DEFAULT_MAX_QUERY_RESULTS: usize = 500;
 pub(super) const DEFAULT_MAX_NEGENTROPY_ITEMS: usize = 50_000;
 pub(super) const DEFAULT_MAX_SUBSCRIPTION_BYTES: usize = 1024 * 1024;
 pub(super) const DEFAULT_MAX_WEBSOCKET_MESSAGE_SIZE: usize = 5 * 1024 * 1024;
@@ -296,18 +295,14 @@ pub struct LocalRelayBuilder {
     pub(crate) max_subid_length: usize,
     /// Max filters in one REQ
     pub(crate) max_filters_per_req: usize,
+    /// Maximum records that can be returned per filter
+    pub(crate) max_filter_limit: usize,
     /// Max total bytes retained by active subscriptions per connection
     pub(crate) max_subscription_bytes: usize,
     /// Max active negentropy subscriptions per connection
     pub(crate) max_negentropy_subscriptions: usize,
     /// Max total negentropy items retained per connection
     pub(crate) max_negentropy_items: usize,
-    /// Max filter's limit
-    pub(crate) max_filter_limit: Option<usize>,
-    /// Max aggregate query results
-    pub(crate) max_query_results: usize,
-    /// Default filter's limit if there is no limit
-    pub(crate) default_filter_limit: usize,
     /// Enables NIP-42 authentication for kind 1059 (GiftWrap), ensuring the
     /// authenticated pubkey is the only "p" tag
     pub(crate) auth_dm: bool,
@@ -351,12 +346,10 @@ impl Default for LocalRelayBuilder {
             websocket_handshake_timeout: DEFAULT_WEBSOCKET_HANDSHAKE_TIMEOUT,
             max_subid_length: 250,
             max_filters_per_req: DEFAULT_MAX_FILTERS_PER_REQ,
+            max_filter_limit: 500,
             max_subscription_bytes: DEFAULT_MAX_SUBSCRIPTION_BYTES,
             max_negentropy_subscriptions: 10,
             max_negentropy_items: DEFAULT_MAX_NEGENTROPY_ITEMS,
-            max_filter_limit: Some(DEFAULT_MAX_QUERY_RESULTS),
-            max_query_results: DEFAULT_MAX_QUERY_RESULTS,
-            default_filter_limit: 500,
             auth_dm: false,
             min_pow: None,
             kinds_blacklist: HashSet::from(BLACKLISTED_KINDS),
@@ -483,10 +476,17 @@ impl LocalRelayBuilder {
         self
     }
 
-    /// Sets the maximum number of filters in one REQ. Defaults to 20.
+    /// Sets the maximum number of filters allowed in a REQ. Defaults to 20.
     #[inline]
     pub fn max_filters_per_req(mut self, max: usize) -> Self {
         self.max_filters_per_req = max;
+        self
+    }
+
+    /// Sets the maximum limit for the filter. Defaults to 500.
+    #[inline]
+    pub fn max_filter_limit(mut self, max: usize) -> Self {
+        self.max_filter_limit = max;
         self
     }
 
@@ -514,27 +514,16 @@ impl LocalRelayBuilder {
         self
     }
 
-    /// Sets the maximum limit for the filter. If the filter's limit exceeds
-    /// this value, it will fallback to this number.
-    #[inline]
-    pub fn max_filter_limit(mut self, max: usize) -> Self {
-        self.max_filter_limit = Some(max);
+    /// This is a no-op
+    #[deprecated(note = "Use max_filters_per_req instead")]
+    pub fn max_query_results(self, _max: usize) -> Self {
         self
     }
 
-    /// Sets the maximum aggregate number of events returned by one REQ.
-    /// Defaults to 500.
-    #[inline]
-    pub fn max_query_results(mut self, max: usize) -> Self {
-        self.max_query_results = max;
-        self
-    }
-
-    /// Sets the default filter limit when no limit is specified. Defaults 500.
-    #[inline]
-    pub fn default_filter_limit(mut self, limit: usize) -> Self {
-        self.default_filter_limit = limit;
-        self
+    /// Sets the maximum limit for the filter. Defaults to 500.
+    #[deprecated(note = "Use max_filter_limit instead")]
+    pub fn default_filter_limit(self, limit: usize) -> Self {
+        self.max_filter_limit(limit)
     }
 
     /// If enabled, NIP-42 will be used for DMs, returning GiftWrap events for

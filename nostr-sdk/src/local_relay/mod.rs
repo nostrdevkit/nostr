@@ -17,14 +17,16 @@ mod tests {
     use std::future::Future;
     use std::pin::Pin;
 
-    use nostr::event::{EventBuilder, FinalizeEvent, Kind, Tag};
+    use nostr::event::{EventBuilder, EventId, FinalizeEvent, Kind, Tag};
     use nostr::filter::Filter;
     use nostr::key::{Keys, PublicKey};
     use nostr::nips::nip17::PrivateDirectMessageBuilder;
     use nostr_memory::MemoryDatabase;
+    use tokio_stream::StreamExt;
 
     use super::*;
     use crate::client::Client;
+    use crate::error::Error;
 
     const UPDATE_TAG: &str = "updated";
 
@@ -230,6 +232,116 @@ mod tests {
         assert_eq!(
             "blocked: repost of a protected event",
             output.failed.values().next().unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_max_filter_limit() {
+        let relay = LocalRelay::builder()
+            .database(MemoryDatabase::unbounded())
+            .max_filter_limit(3)
+            .build();
+        relay.run().await.unwrap();
+
+        let keys = Keys::generate();
+        let client = Client::default();
+
+        client
+            .add_relay(relay.url().await)
+            .and_connect()
+            .await
+            .unwrap();
+
+        for i in 0..20 {
+            client
+                .send_event(
+                    &EventBuilder::new(
+                        if i % 2 == 1 {
+                            Kind::TextNote
+                        } else {
+                            Kind::Comment
+                        },
+                        i.to_string(),
+                    )
+                    .finalize(&keys)
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+        }
+
+        let result = client
+            .fetch_events([
+                Filter::new().kind(Kind::TextNote),
+                Filter::new().kind(Kind::Comment),
+            ])
+            .await
+            .unwrap();
+
+        assert_eq!(6, result.len(), "max result is 6");
+        assert_eq!(
+            3,
+            result.iter().filter(|e| e.kind == Kind::TextNote).count()
+        );
+        assert_eq!(3, result.iter().filter(|e| e.kind == Kind::Comment).count());
+
+        let mut stream = client
+            .stream_events([Filter::new().ids([
+                EventId::from_hex(
+                    "0000000000000000000000000000000000000000000000000000000000000000",
+                )
+                .unwrap(),
+                EventId::from_hex(
+                    "0000000000000000000000000000000000000000000000000000000000000001",
+                )
+                .unwrap(),
+                EventId::from_hex(
+                    "0000000000000000000000000000000000000000000000000000000000000002",
+                )
+                .unwrap(),
+                EventId::from_hex(
+                    "0000000000000000000000000000000000000000000000000000000000000003",
+                )
+                .unwrap(),
+            ])])
+            .await
+            .unwrap();
+
+        let (_, res) = stream.next().await.unwrap();
+        assert_eq!(
+            res.unwrap_err(),
+            Error::relay_msg(String::from("blocked: requested too many event IDs"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_max_req_filter_size() {
+        let relay = LocalRelay::builder()
+            .database(MemoryDatabase::unbounded())
+            .max_filters_per_req(1)
+            .build();
+        relay.run().await.unwrap();
+
+        let client = Client::default();
+
+        client
+            .add_relay(relay.url().await)
+            .and_connect()
+            .await
+            .unwrap();
+
+        let mut stream = client
+            .stream_events([
+                Filter::new().kind(Kind::TextNote),
+                Filter::new().kind(Kind::Comment),
+            ])
+            .await
+            .unwrap();
+
+        let (_, res) = stream.next().await.unwrap();
+        assert_eq!(
+            res.unwrap_err(),
+            Error::relay_msg(String::from("blocked: too many filters"))
         );
     }
 }

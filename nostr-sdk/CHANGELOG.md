@@ -27,6 +27,12 @@
 
 -->
 
+## Unreleased
+
+### Deprecated
+
+- Deprecate `LocalRelayBuilder::max_query_results` and `LocalRelayBuilder::default_filter_limit` (https://github.com/nostrdevkit/nostr/pull/1461)
+
 ## v0.45.2 - 2026/08/19
 
 ### Fixed
