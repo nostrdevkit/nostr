@@ -1316,19 +1316,8 @@ impl InnerLocalRelay {
             }
         }
 
-        // Cap each query and the merged result so multiple filters cannot multiply output.
-        for filter in filters.iter_mut() {
-            let requested_limit = filter.limit.unwrap_or_else(|| {
-                filter
-                    .ids
-                    .as_ref()
-                    .map_or(self.default_filter_limit, |ids| ids.len())
-            });
-            let per_filter_limit = self
-                .max_filter_limit
-                .map_or(requested_limit, |max| requested_limit.min(max));
-            filter.limit = Some(per_filter_limit.min(self.max_query_results));
-        }
+        // set the correct limit for the filters
+        self.set_filters_limit(&mut filters);
 
         // Check if subscription has IDs
         let ids_len: Option<usize> = filters
@@ -1461,6 +1450,34 @@ impl InnerLocalRelay {
         }
 
         GiftWrapQueryAccess::Allowed
+    }
+
+    /// Ensures that each filter's effective limit respects the configured
+    /// `max_filter_limit` and that the combined limits across all filters do
+    /// not exceed `max_query_results`.
+    fn set_filters_limit(&self, filters: &mut [Filter]) {
+        let mut total_limit: usize = 0;
+        for filter in filters.iter_mut() {
+            // Determine the effective limit for this filter:
+            // - If an ID set exists, its length; otherwise the filter's own limit.
+            // - Cap that value by `max_filter_limit`.
+            // - Fall back to `default_filter_limit` if both are absent.
+            let limit = (filter.ids.as_ref().map(BTreeSet::len).or(filter.limit))
+                .min(self.max_filter_limit)
+                .unwrap_or(self.default_filter_limit);
+
+            filter.limit = Some(limit);
+            total_limit = total_limit.saturating_add(limit);
+        }
+
+        // If the sum of all limits exceeds the maximum allowed query results,
+        // redistribute the budget equally among all filters.
+        if total_limit > self.max_query_results {
+            // TODO: Set per-filter limits instead of a global one; filters
+            // matching a single id should have a limit of 1.
+            let new_limit = self.max_query_results.div_ceil(filters.len());
+            filters.iter_mut().for_each(|f| f.limit = Some(new_limit));
+        }
     }
 }
 
