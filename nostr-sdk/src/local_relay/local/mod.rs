@@ -95,6 +95,12 @@ impl LocalRelay {
         self.inner.url().await
     }
 
+    /// Returns the remaining connection capacity before the limit is reached.
+    #[inline]
+    pub fn connections_left(&self) -> usize {
+        self.inner.connections_limit.available_permits()
+    }
+
     /// Sync events with other relay(s).
     #[inline]
     pub async fn sync_with<'a, I, U>(
