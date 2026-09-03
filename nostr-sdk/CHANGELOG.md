@@ -27,6 +27,12 @@
 
 -->
 
+## Unreleased
+
+### Changed
+
+- local_relay: default connection limit set to 512 (https://github.com/nostrdevkit/nostr/pull/1462)
+
 ## v0.45.2 - 2026/08/19
 
 ### Fixed
