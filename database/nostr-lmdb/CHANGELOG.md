@@ -27,6 +27,12 @@
 
 -->
 
+## Unreleased
+
+### Added
+
+- Support event expiration (https://github.com/nostrdevkit/nostr/pull/1474)
+
 ## v0.45.2 - 2026/08/19
 
 ### Fixed

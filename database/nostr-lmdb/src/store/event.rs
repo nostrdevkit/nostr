@@ -59,6 +59,16 @@ impl<'a> DatabaseTag<'a> {
         }
     }
 
+    /// Return the expiration timestamp if it's `expiration` tag
+    #[inline]
+    pub(super) fn expiration(&self) -> Option<u64> {
+        if self.kind() == "expiration" {
+            return self.content().and_then(|t| u64::from_str(t).ok());
+        }
+
+        None
+    }
+
     /// Into owned tag
     pub(super) fn into_owned(self) -> Tag {
         let buf: Vec<String> = self.buf.into_iter().map(|t| t.into_owned()).collect();

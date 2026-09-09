@@ -122,7 +122,14 @@ impl Store {
 
             let txn: RoTxn = db.read_txn()?;
             let output = db.query(&txn, filter)?;
-            events.extend(output.into_iter().map(|e| e.into_owned()));
+            let now = Timestamp::now();
+
+            events.extend(
+                output
+                    .into_iter()
+                    .filter(|e| !e.is_expired_at(now))
+                    .map(|e| e.into_owned()),
+            );
             txn.commit()?;
 
             Ok(events)
@@ -151,6 +158,14 @@ impl Store {
 
     pub(super) async fn delete(&self, filter: Filter) -> Result<(), StoreError> {
         let (item, rx) = IngesterItem::delete_with_feedback(filter);
+        self.ingester
+            .send(item)
+            .map_err(|_| StoreError::FlumeSend)?;
+        rx.await?
+    }
+
+    pub(super) async fn delete_expired(&self) -> Result<(), StoreError> {
+        let (item, rx) = IngesterItem::delete_expired_with_feedback();
         self.ingester
             .send(item)
             .map_err(|_| StoreError::FlumeSend)?;
