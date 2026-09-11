@@ -107,6 +107,18 @@ pub enum ErrorCode {
     /// This public key has no wallet connected
     #[serde(rename = "UNAUTHORIZED")]
     Unauthorized,
+    /// The URI or another parameter is invalid
+    #[serde(rename = "BAD_REQUEST")]
+    BadRequest,
+    /// The wallet cannot select a supported payment instruction
+    #[serde(rename = "UNSUPPORTED_PAYMENT_INSTRUCTION")]
+    UnsupportedPaymentInstruction,
+    /// The selected instruction uses a different Bitcoin network
+    #[serde(rename = "UNSUPPORTED_NETWORK")]
+    UnsupportedNetwork,
+    /// No route fit the `max_fee` budget and no payment was attempted
+    #[serde(rename = "FEE_LIMIT_EXCEEDED")]
+    FeeLimitExceeded,
     /// An internal error
     #[serde(rename = "INTERNAL")]
     Internal,
@@ -364,6 +376,10 @@ pub enum Method {
     CancelHoldInvoice,
     /// Settle Hold Invoice
     SettleHoldInvoice,
+    /// Pay BIP-321
+    Pay,
+    /// Receive BIP-321
+    Receive,
     /// Unknown method
     Unknown(String),
 }
@@ -414,6 +430,8 @@ impl Method {
             Self::MakeHoldInvoice => "make_hold_invoice",
             Self::CancelHoldInvoice => "cancel_hold_invoice",
             Self::SettleHoldInvoice => "settle_hold_invoice",
+            Self::Pay => "pay",
+            Self::Receive => "receive",
             Self::Unknown(method) => method.as_str(),
         }
     }
@@ -434,6 +452,8 @@ impl FromStr for Method {
             "make_hold_invoice" => Ok(Self::MakeHoldInvoice),
             "cancel_hold_invoice" => Ok(Self::CancelHoldInvoice),
             "settle_hold_invoice" => Ok(Self::SettleHoldInvoice),
+            "pay" => Ok(Self::Pay),
+            "receive" => Ok(Self::Receive),
             m => Ok(Self::Unknown(m.to_string())),
         }
     }
@@ -481,6 +501,10 @@ pub enum RequestParams {
     CancelHoldInvoice(CancelHoldInvoiceRequest),
     /// Settle Hold Invoice
     SettleHoldInvoice(SettleHoldInvoiceRequest),
+    /// Pay BIP-321
+    Pay(PayRequest),
+    /// Receive BIP-321
+    Receive(ReceiveRequest),
 }
 
 impl Serialize for RequestParams {
@@ -505,6 +529,8 @@ impl Serialize for RequestParams {
             RequestParams::MakeHoldInvoice(p) => p.serialize(serializer),
             RequestParams::CancelHoldInvoice(p) => p.serialize(serializer),
             RequestParams::SettleHoldInvoice(p) => p.serialize(serializer),
+            RequestParams::Pay(p) => p.serialize(serializer),
+            RequestParams::Receive(p) => p.serialize(serializer),
         }
     }
 }
@@ -606,22 +632,40 @@ pub enum TransactionType {
 
 /// Transaction State
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum TransactionState {
     /// Pending
-    #[serde(rename = "pending")]
     Pending,
     /// Settled
-    #[serde(rename = "settled")]
     Settled,
     /// Expired (for invoices)
-    #[serde(rename = "expired")]
     Expired,
     /// Failed (for payments)
-    #[serde(rename = "failed")]
     Failed,
     /// Accepted (for hold invoices)
-    #[serde(rename = "accepted")]
     Accepted,
+}
+
+/// BIP321 Pay State
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Bip321PayState {
+    /// Pending
+    Pending,
+    /// Settled
+    Settled,
+    /// Failed
+    Failed,
+}
+
+/// Instruction Type
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InstructionType {
+    /// Bolt 11
+    Bolt11,
+    /// Bolt 12
+    Bolt12,
 }
 
 /// List Transactions Request
@@ -681,6 +725,39 @@ pub struct CancelHoldInvoiceRequest {
 pub struct SettleHoldInvoiceRequest {
     /// preimage
     pub preimage: String,
+}
+
+/// Pay BIP-321 Request
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PayRequest {
+    /// BIP-321 URI
+    pub payment: String,
+    /// Amount in msats
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub amount: Option<u64>,
+    /// maximum routing fee the sender is willing to pay in msats
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_fee: Option<u64>,
+    /// Payer-provided message
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payer_note: Option<String>,
+    /// Optional metadata about the payment
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
+}
+
+/// Receive BIP-321 Request
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ReceiveRequest {
+    /// Amount in msats
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub amount: Option<u64>,
+    /// Description
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Optional metadata about the payment
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
 }
 
 /// NIP47 Request
@@ -803,6 +880,14 @@ impl Request {
             Method::CancelHoldInvoice => {
                 let params: CancelHoldInvoiceRequest = parse_json_from_value(template.params)?;
                 RequestParams::CancelHoldInvoice(params)
+            }
+            Method::Pay => {
+                let params: PayRequest = parse_json_from_value(template.params)?;
+                RequestParams::Pay(params)
+            }
+            Method::Receive => {
+                let params: ReceiveRequest = parse_json_from_value(template.params)?;
+                RequestParams::Receive(params)
             }
             Method::Unknown(name) => {
                 return Err(unsupported_method(&name));
@@ -1053,6 +1138,51 @@ pub struct CancelHoldInvoiceResponse {}
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SettleHoldInvoiceResponse {}
 
+/// Pay BIP-321 Response
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PayResponse {
+    /// Transaction ID
+    pub transaction_id: String,
+    /// Transaction state
+    pub state: Bip321PayState,
+    /// Instruction type
+    pub instruction_type: InstructionType,
+    /// Amount paid in msats
+    pub amount: u64,
+    /// Fees paid in msats
+    pub fees_paid: u64,
+    /// Payment hash
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payment_hash: Option<String>,
+    /// Preimage
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preimage: Option<String>,
+    /// Bolt12 payer proof
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payer_proof: Option<String>,
+    /// Txid for onchain transaction identifier
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub txid: Option<String>,
+    /// Failure reason
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
+    /// Created timestamp
+    pub created_at: Timestamp,
+    /// Settled timestamp
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub settled_at: Option<Timestamp>,
+}
+
+/// Receive BIP-321 Response
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ReceiveResponse {
+    /// BIP-321 URI
+    pub bip321: String,
+    /// Transaction ID
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transaction_id: Option<String>,
+}
+
 /// NIP47 Response Result
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResponseResult {
@@ -1076,6 +1206,10 @@ pub enum ResponseResult {
     CancelHoldInvoice(CancelHoldInvoiceResponse),
     /// Settle Hold Invoice
     SettleHoldInvoice(SettleHoldInvoiceResponse),
+    /// Pay BIP-321
+    Pay(PayResponse),
+    /// Receive BIP-321
+    Receive(ReceiveResponse),
 }
 
 impl Serialize for ResponseResult {
@@ -1098,6 +1232,8 @@ impl Serialize for ResponseResult {
             ResponseResult::MakeHoldInvoice(p) => p.serialize(serializer),
             ResponseResult::CancelHoldInvoice(p) => p.serialize(serializer),
             ResponseResult::SettleHoldInvoice(p) => p.serialize(serializer),
+            ResponseResult::Pay(p) => p.serialize(serializer),
+            ResponseResult::Receive(p) => p.serialize(serializer),
         }
     }
 }
@@ -1191,6 +1327,14 @@ impl Response {
                 Method::SettleHoldInvoice => {
                     let result: SettleHoldInvoiceResponse = parse_json_from_value(result)?;
                     ResponseResult::SettleHoldInvoice(result)
+                }
+                Method::Pay => {
+                    let result: PayResponse = parse_json_from_value(result)?;
+                    ResponseResult::Pay(result)
+                }
+                Method::Receive => {
+                    let result: ReceiveResponse = parse_json_from_value(result)?;
+                    ResponseResult::Receive(result)
                 }
                 Method::Unknown(name) => {
                     return Err(unsupported_method(&name));
@@ -1296,6 +1440,32 @@ impl Response {
         }
 
         if let Some(ResponseResult::GetInfo(result)) = self.result {
+            return Ok(result);
+        }
+
+        Err(unexpected_result())
+    }
+
+    /// Convert [Response] to [PayResponse]
+    pub fn to_pay(self) -> Result<PayResponse, Error> {
+        if let Some(e) = self.error {
+            return Err(error_code(e));
+        }
+
+        if let Some(ResponseResult::Pay(result)) = self.result {
+            return Ok(result);
+        }
+
+        Err(unexpected_result())
+    }
+
+    /// Convert [Response] to [ReceiveResponse]
+    pub fn to_receive(self) -> Result<ReceiveResponse, Error> {
+        if let Some(e) = self.error {
+            return Err(error_code(e));
+        }
+
+        if let Some(ResponseResult::Receive(result)) = self.result {
             return Ok(result);
         }
 

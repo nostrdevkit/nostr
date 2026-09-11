@@ -39,6 +39,7 @@
 - Take an `Into<Tag>` iterator instead of `Tag` iterator in
   `GiftWrapBuilder::extra_tags`, `PrivateDirectMessageBuilder::extra_tags`
   and `PrivateDirectMessageBuilder::rumor_extra_tags` (https://github.com/nostrdevkit/nostr/pull/1447)
+- nip47 BIP321 methods `pay` and `receive` (https://github.com/nostrdevkit/nostr/pull/1465)
 
 ### Security
 
