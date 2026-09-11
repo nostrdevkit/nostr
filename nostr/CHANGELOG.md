@@ -39,6 +39,7 @@
 - Take an `Into<Tag>` iterator instead of `Tag` iterator in
   `GiftWrapBuilder::extra_tags`, `PrivateDirectMessageBuilder::extra_tags`
   and `PrivateDirectMessageBuilder::rumor_extra_tags` (https://github.com/nostrdevkit/nostr/pull/1447)
+- Support `NIP-A3` payto payment targets (https://github.com/nostrdevkit/nostr/pull/1467)
 
 ### Security
 
