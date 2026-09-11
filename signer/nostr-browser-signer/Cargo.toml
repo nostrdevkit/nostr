@@ -1,6 +1,6 @@
 [package]
 name = "nostr-browser-signer"
-version = "0.45.0"
+version = "0.45.1"
 edition.workspace = true
 description = "Nostr Browser signer implementation (NIP-07)."
 authors.workspace = true

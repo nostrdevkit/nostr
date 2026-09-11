@@ -1,6 +1,6 @@
 [package]
 name = "nostr-sdk"
-version = "0.45.2"
+version = "0.45.3"
 edition.workspace = true
 description = "A full-featured SDK for building high-performance and reliable nostr applications."
 authors.workspace = true

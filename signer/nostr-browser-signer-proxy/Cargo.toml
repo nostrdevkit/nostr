@@ -1,6 +1,6 @@
 [package]
 name = "nostr-browser-signer-proxy"
-version = "0.45.0"
+version = "0.45.1"
 edition.workspace = true
 description = "Proxy to use Nostr Browser signer (NIP-07) in native applications."
 authors.workspace = true

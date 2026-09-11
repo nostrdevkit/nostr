@@ -1,6 +1,6 @@
 [package]
 name = "nostr-memory"
-version = "0.45.1"
+version = "0.45.2"
 edition.workspace = true
 description = "Nostr in-memory events database implementation"
 authors.workspace = true

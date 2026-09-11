@@ -1,6 +1,6 @@
 [package]
 name = "nostr-gossip-sqlite"
-version = "0.45.0"
+version = "0.45.1"
 edition.workspace = true
 description = "Nostr SQLite gossip backend"
 authors.workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "nostr-database"
-version = "0.45.1"
+version = "0.45.2"
 edition.workspace = true
 description = "Events database trait for nostr apps."
 authors.workspace = true
