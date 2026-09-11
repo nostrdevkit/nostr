@@ -15,7 +15,6 @@ use core::time::Duration;
 use super::util::{missing_tag_kind, missing_value, take_string, unknown_tag};
 use crate::error::Error;
 use crate::event::{Kind, Tag, impl_tag_codec_conversions};
-use crate::util::UnwrapInfallible;
 
 const RTT_OPEN: &str = "rtt-open";
 const RTT_READ: &str = "rtt-read";
@@ -75,15 +74,13 @@ impl_tag_codec_conversions! {
             RTT_READ => Ok(Self::RttRead(parse_time(iter, RTT_READ)?)),
             RTT_WRITE => Ok(Self::RttWrite(parse_time(iter, RTT_WRITE)?)),
             NETWORK_TYPE => {
-                let network_type = take_string(&mut iter, "network type")?
-                    .parse()
-                    .unwrap_infallible();
+                let Ok(network_type) = take_string(&mut iter, "network type")?
+                    .parse();
                 Ok(Self::NetworkType(network_type))
             }
             RELAY_TYPE => {
-                let relay_type = take_string(&mut iter, "relay type")?
-                    .parse()
-                    .unwrap_infallible();
+                let Ok(relay_type) = take_string(&mut iter, "relay type")?
+                    .parse();
                 Ok(Self::RelayType(relay_type))
             }
             NIP => Ok(Self::Nip(take_string(&mut iter, "NIP")?)),
@@ -91,7 +88,7 @@ impl_tag_codec_conversions! {
                 let value = take_string(&mut iter, "requirement")?;
                 let BoolTag { value, yes } = BoolTag::parse(&value);
                 Ok(Self::Requirement {
-                    requirement: value.parse().unwrap_infallible(),
+                    requirement: match Requirement::from_str(value) { Ok(r) => r },
                     is_required: yes,
                 })
             }

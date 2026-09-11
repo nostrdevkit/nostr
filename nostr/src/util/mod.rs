@@ -4,7 +4,6 @@
 
 #[cfg(feature = "rand")]
 use alloc::string::String;
-use core::convert::Infallible;
 #[cfg(feature = "std")]
 use std::sync::LazyLock;
 
@@ -112,17 +111,3 @@ pub(crate) static SECP256K1: LazyLock<Secp256k1<All>> = LazyLock::new(|| {
 
     ctx
 });
-
-pub(crate) trait UnwrapInfallible<T>: Sized {
-    fn unwrap_infallible(self) -> T;
-}
-
-impl<T> UnwrapInfallible<T> for Result<T, Infallible> {
-    #[inline]
-    fn unwrap_infallible(self) -> T {
-        match self {
-            Ok(value) => value,
-            Err(e) => match e {},
-        }
-    }
-}
