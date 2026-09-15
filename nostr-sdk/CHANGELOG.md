@@ -29,6 +29,10 @@
 
 ## Unreleased
 
+### Added
+
+- local-relay: Add `LocalRelayBuilderNip42::relay_url` (https://github.com/nostrdevkit/nostr/pull/1476) to make it possible to configure a custom `relay_url` for the nip42 challenge validation
+
 ### Deprecated
 
 - Deprecate `LocalRelayBuilder::max_query_results` and `LocalRelayBuilder::default_filter_limit` (https://github.com/nostrdevkit/nostr/pull/1461)

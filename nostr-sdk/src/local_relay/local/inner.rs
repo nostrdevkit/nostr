@@ -917,7 +917,15 @@ impl InnerLocalRelay {
                     .await;
                 }
 
-                match session.nip42.check_challenge(&event, &self.url().await) {
+                let relay_url: RelayUrl = match self
+                    .nip42
+                    .as_ref()
+                    .and_then(|opts| opts.relay_url.as_ref())
+                {
+                    Some(url) => url.clone(),
+                    None => self.url().await,
+                };
+                match session.nip42.check_challenge(&event, &relay_url) {
                     Ok(()) => {
                         send_msg(
                             ws_tx,

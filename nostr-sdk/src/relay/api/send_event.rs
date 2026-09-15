@@ -342,6 +342,7 @@ mod tests {
         // Mock relay
         let opts = LocalRelayBuilderNip42 {
             mode: LocalRelayBuilderNip42Mode::Write,
+            relay_url: None,
         };
         let mock = LocalRelay::builder().nip42(opts).build();
         mock.run().await.unwrap();
@@ -370,6 +371,7 @@ mod tests {
         // Mock relay
         let opts = LocalRelayBuilderNip42 {
             mode: LocalRelayBuilderNip42Mode::Write,
+            relay_url: None,
         };
         let mock = LocalRelay::builder().nip42(opts).build();
         mock.run().await.unwrap();

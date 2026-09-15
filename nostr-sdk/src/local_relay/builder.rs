@@ -230,6 +230,10 @@ pub struct LocalRelayBuilderNip42 {
     pub mode: LocalRelayBuilderNip42Mode,
     // /// Allowed public keys
     // pub allowed: HashSet<PublicKey>,
+    /// Relay URL expected in NIP-42 authentication events.
+    ///
+    /// If not set, the local relay's listening URL is used.
+    pub relay_url: Option<RelayUrl>,
 }
 
 impl LocalRelayBuilderNip42 {
@@ -238,6 +242,7 @@ impl LocalRelayBuilderNip42 {
     pub fn write() -> Self {
         Self {
             mode: LocalRelayBuilderNip42Mode::Write,
+            relay_url: None,
         }
     }
 
@@ -246,6 +251,7 @@ impl LocalRelayBuilderNip42 {
     pub fn read() -> Self {
         Self {
             mode: LocalRelayBuilderNip42Mode::Read,
+            relay_url: None,
         }
     }
 
@@ -254,7 +260,19 @@ impl LocalRelayBuilderNip42 {
     pub fn read_and_write() -> Self {
         Self {
             mode: LocalRelayBuilderNip42Mode::Both,
+            relay_url: None,
         }
+    }
+
+    /// Set the relay URL expected in NIP-42 authentication events.
+    ///
+    /// This is useful when the local relay is embedded behind another
+    /// WebSocket server, reverse proxy, or TLS terminator and its public
+    /// URL differs from its listening URL.
+    #[inline]
+    pub fn relay_url(mut self, url: RelayUrl) -> Self {
+        self.relay_url = Some(url);
+        self
     }
 }
 
