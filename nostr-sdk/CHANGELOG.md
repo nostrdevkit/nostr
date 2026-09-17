@@ -27,6 +27,13 @@
 
 -->
 
+## Unreleased
+
+### Fixed
+
+- Explicitly close active local relay subscriptions when their live event buffer
+  overflows, allowing clients to detect gaps and resubscribe for stored events.
+
 ## v0.45.3 - 2026/09/11
 
 ### Fixed

@@ -424,23 +424,51 @@ impl InnerLocalRelay {
                     }
                 }
                 event = new_event.recv() => {
-                    if let Ok(event) = event {
-                         // Iter subscriptions
-                        'sub_iter: for (subscription_id, subscription) in session.subscriptions.iter() {
-                            for filter in subscription.filters.iter() {
-                                // Check if event matches filter
-                                if filter.match_event(&event, MatchEventOptions::new()) {
-                                    send_msg(&mut tx, RelayMessage::Event{
-                                        subscription_id: Cow::Borrowed(subscription_id),
-                                        event: Cow::Borrowed(&event)
-                                    }).await?;
+                    let event: Event = match event {
+                        Ok(event) => event,
+                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                            // Lost events cannot be matched against filters anymore. End all
+                            // live subscriptions rather than silently continue an incomplete stream.
+                            new_event = new_event.resubscribe();
 
-                                    // Found a match, stop iterating the filters and continue with the next subscription
-                                    continue 'sub_iter;
-                                }
+                            if !session.subscriptions.is_empty() {
+                                tracing::warn!(
+                                    peer = %addr,
+                                    skipped_notifications = skipped,
+                                    affected_subscriptions = session.subscriptions.len(),
+                                    "Closing live subscriptions after broadcast overflow"
+                                );
                             }
 
+                            session.subscription_bytes = 0;
+
+                            for (subscription_id, _) in session.subscriptions.drain() {
+                                send_msg(&mut tx, RelayMessage::Closed {
+                                    subscription_id: Cow::Owned(subscription_id),
+                                    message: Cow::Borrowed("error: live event buffer overflow; resubscribe to recover stored events"),
+                                }).await?;
+                            }
+
+                            continue;
                         }
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    };
+
+                    // Iter subscriptions
+                    'sub_iter: for (subscription_id, subscription) in session.subscriptions.iter() {
+                        for filter in subscription.filters.iter() {
+                            // Check if event matches filter
+                            if filter.match_event(&event, MatchEventOptions::new()) {
+                                send_msg(&mut tx, RelayMessage::Event{
+                                    subscription_id: Cow::Borrowed(subscription_id),
+                                    event: Cow::Borrowed(&event)
+                                }).await?;
+
+                                // Found a match, stop iterating the filters and continue with the next subscription
+                                continue 'sub_iter;
+                            }
+                        }
+
                     }
                 }
                 _ = self.shutdown.notified() => break,
@@ -1656,6 +1684,212 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug, Default)]
+    struct PausedCount {
+        entered: Notify,
+        release: Notify,
+    }
+
+    impl QueryPolicy for PausedCount {
+        fn admit_query<'a>(
+            &'a self,
+            query: &'a mut Filter,
+            _addr: &'a SocketAddr,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = QueryPolicyResult> + Send + 'a>>
+        {
+            Box::pin(async move {
+                if query.limit == Some(42) {
+                    self.entered.notify_one();
+                    self.release.notified().await;
+                }
+                QueryPolicyResult::Accept
+            })
+        }
+    }
+
+    async fn next_frame(socket: &mut WebSocketStream<tokio::io::DuplexStream>) -> String {
+        tokio::time::timeout(Duration::from_secs(2), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+            .into_text()
+            .unwrap()
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn live_overflow_closes_subscriptions_and_allows_resubscription() {
+        check_live_backlog(1025, true).await;
+    }
+
+    #[tokio::test]
+    async fn live_backlog_at_capacity_preserves_subscriptions() {
+        check_live_backlog(1024, false).await;
+    }
+
+    async fn check_live_backlog(event_count: usize, expect_overflow: bool) {
+        let policy = Arc::new(PausedCount::default());
+        let mut relay =
+            InnerLocalRelay::new(LocalRelayBuilder::default().max_subscription_bytes(80));
+        relay.query_policy = Some(policy.clone());
+        let (client, server) = tokio::io::duplex(4096);
+        let inner = relay.clone();
+        let connection = tokio::spawn(async move {
+            inner
+                .handle_upgraded_connection(server, "127.0.0.1:1234".parse().unwrap())
+                .await
+        });
+        let mut client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
+        for id in ["first", "second"] {
+            client
+                .send(Message::Text(
+                    format!(r#"["REQ","{id}",{{"kinds":[1]}}]"#).into(),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(next_frame(&mut client).await, format!(r#"["EOSE","{id}"]"#));
+        }
+
+        // A second connection continues consuming the same broadcast normally.
+        let (healthy, server) = tokio::io::duplex(4096);
+        let inner = relay.clone();
+        let healthy_connection = tokio::spawn(async move {
+            inner
+                .handle_upgraded_connection(server, "127.0.0.1:1235".parse().unwrap())
+                .await
+        });
+        let mut healthy = WebSocketStream::from_raw_socket(healthy, Role::Client, None).await;
+        healthy
+            .send(Message::Text(r#"["REQ","healthy",{"kinds":[1]}]"#.into()))
+            .await
+            .unwrap();
+        assert_eq!(next_frame(&mut healthy).await, r#"["EOSE","healthy"]"#);
+
+        // Hold one session inside a query while filling its live broadcast buffer.
+        client
+            .send(Message::Text(
+                r#"["COUNT","pause",{"kinds":[1],"limit":42}]"#.into(),
+            ))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), policy.entered.notified())
+            .await
+            .unwrap();
+        let event = EventBuilder::new(Kind::TextNote, "during pause")
+            .finalize(&Keys::generate())
+            .unwrap();
+        relay.save_event(&event).await.unwrap();
+        for _ in 0..event_count {
+            assert!(relay.notify_event(event.clone()));
+            let frame = next_frame(&mut healthy).await;
+            assert!(matches!(
+                RelayMessage::from_json(frame).unwrap(),
+                RelayMessage::Event { .. }
+            ));
+        }
+        policy.release.notify_one();
+        assert_eq!(
+            next_frame(&mut client).await,
+            r#"["COUNT","pause",{"count":1}]"#
+        );
+
+        if expect_overflow {
+            let mut closed = HashSet::new();
+            for _ in 0..2 {
+                let frame = next_frame(&mut client).await;
+                match RelayMessage::from_json(frame).unwrap() {
+                    RelayMessage::Closed {
+                        subscription_id,
+                        message,
+                    } => {
+                        assert_eq!(
+                            message,
+                            "error: live event buffer overflow; resubscribe to recover stored events"
+                        );
+                        closed.insert(subscription_id.to_string());
+                    }
+                    message => panic!("expected explicit gap notification, got {message:?}"),
+                }
+            }
+            assert_eq!(
+                closed,
+                HashSet::from(["first".to_owned(), "second".to_owned()])
+            );
+        } else {
+            let mut counts = HashMap::new();
+            for _ in 0..event_count * 2 {
+                let frame = next_frame(&mut client).await;
+                match RelayMessage::from_json(frame).unwrap() {
+                    RelayMessage::Event {
+                        subscription_id,
+                        event: received,
+                    } => {
+                        assert_eq!(received.id, event.id);
+                        *counts.entry(subscription_id.to_string()).or_insert(0) += 1;
+                    }
+                    message => panic!("expected retained live event, got {message:?}"),
+                }
+            }
+            assert_eq!(
+                counts,
+                HashMap::from([
+                    ("first".to_owned(), event_count),
+                    ("second".to_owned(), event_count)
+                ])
+            );
+            for id in ["first", "second"] {
+                client
+                    .send(Message::Text(format!(r#"["CLOSE","{id}"]"#).into()))
+                    .await
+                    .unwrap();
+            }
+        }
+
+        // Reusing the connection must not retain the old subscriptions' byte budget.
+        client
+            .send(Message::Text(r#"["REQ","recovered",{"kinds":[1]}]"#.into()))
+            .await
+            .unwrap();
+        let frame = next_frame(&mut client).await;
+        match RelayMessage::from_json(frame).unwrap() {
+            RelayMessage::Event {
+                subscription_id,
+                event: received,
+            } => {
+                assert_eq!(subscription_id.as_str(), "recovered");
+                assert_eq!(received.id, event.id);
+            }
+            message => panic!("expected recovered stored event, got {message:?}"),
+        }
+        assert_eq!(next_frame(&mut client).await, r#"["EOSE","recovered"]"#);
+        let event = EventBuilder::new(Kind::TextNote, "after recovery")
+            .finalize(&Keys::generate())
+            .unwrap();
+        assert!(relay.notify_event(event.clone()));
+        let frame = next_frame(&mut client).await;
+        match RelayMessage::from_json(frame).unwrap() {
+            RelayMessage::Event {
+                subscription_id,
+                event: received,
+            } => {
+                assert_eq!(subscription_id.as_str(), "recovered");
+                assert_eq!(received.id, event.id);
+            }
+            message => panic!("expected recovered live subscription, got {message:?}"),
+        }
+        let frame = next_frame(&mut healthy).await;
+        assert!(matches!(
+            RelayMessage::from_json(frame).unwrap(),
+            RelayMessage::Event { .. }
+        ));
+
+        connection.abort();
+        healthy_connection.abort();
+        let _ = connection.await;
+        let _ = healthy_connection.await;
+    }
 
     #[derive(Debug)]
     struct RejectWrites;
