@@ -42,6 +42,10 @@ enum OperationResult {
         result: Result<(), StoreError>,
         tx: Option<oneshot::Sender<Result<(), StoreError>>>,
     },
+    DeleteExpired {
+        result: Result<(), StoreError>,
+        tx: Option<oneshot::Sender<Result<(), StoreError>>>,
+    },
     Wipe {
         result: Result<(), StoreError>,
         tx: Option<oneshot::Sender<Result<(), StoreError>>>,
@@ -79,6 +83,15 @@ impl OperationResult {
                     tracing::error!(error = %e, "Delete operation failed in batch");
                 }
             }
+            Self::DeleteExpired { result, tx } => {
+                if let Some(tx) = tx {
+                    if tx.send(result).is_err() {
+                        tracing::debug!("Failed to send delete expired result: receiver dropped");
+                    }
+                } else if let Err(e) = result {
+                    tracing::error!(error = %e, "delete expired operation failed in batch");
+                }
+            }
             Self::Wipe { result, tx } => {
                 if let Some(tx) = tx {
                     if tx.send(result).is_err() {
@@ -104,6 +117,9 @@ enum IngesterOperation {
         filter: Filter,
         tx: Option<oneshot::Sender<Result<(), StoreError>>>,
     },
+    DeleteExpired {
+        tx: Option<oneshot::Sender<Result<(), StoreError>>>,
+    },
     Wipe {
         tx: Option<oneshot::Sender<Result<(), StoreError>>>,
     },
@@ -122,6 +138,10 @@ impl IngesterOperation {
                 tx,
             },
             Self::Delete { tx, .. } => OperationResult::Delete {
+                result: Err(error),
+                tx,
+            },
+            Self::DeleteExpired { tx } => OperationResult::DeleteExpired {
                 result: Err(error),
                 tx,
             },
@@ -171,6 +191,16 @@ impl IngesterItem {
                 filter,
                 tx: Some(tx),
             },
+        };
+        (item, rx)
+    }
+
+    #[must_use]
+    pub(super) fn delete_expired_with_feedback() -> (Self, oneshot::Receiver<Result<(), StoreError>>)
+    {
+        let (tx, rx) = oneshot::channel();
+        let item: Self = Self {
+            operation: IngesterOperation::DeleteExpired { tx: Some(tx) },
         };
         (item, rx)
     }
@@ -342,6 +372,10 @@ impl Ingester {
                 let result = self.db.delete(txn, filter);
                 OperationResult::Delete { result, tx }
             }
+            IngesterOperation::DeleteExpired { tx } => {
+                let result = self.db.delete_expired(txn);
+                OperationResult::DeleteExpired { result, tx }
+            }
             IngesterOperation::Wipe { tx } => {
                 let result = self.db.wipe(txn);
                 OperationResult::Wipe { result, tx }
@@ -362,6 +396,9 @@ fn mark_all_as_failed(results: &mut [OperationResult]) {
                 *res = Err(StoreError::BatchTransactionFailed)
             }
             OperationResult::Delete { result: res, .. } => {
+                *res = Err(StoreError::BatchTransactionFailed)
+            }
+            OperationResult::DeleteExpired { result: res, .. } => {
                 *res = Err(StoreError::BatchTransactionFailed)
             }
             OperationResult::Wipe { result: res, .. } => {

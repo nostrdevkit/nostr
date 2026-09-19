@@ -1055,5 +1055,42 @@ macro_rules! database_unit_tests {
             let status = store.save_event(&new_event).await.unwrap();
             assert_eq!(status, SaveEventStatus::Rejected(RejectedReason::Vanished));
         }
+
+        #[tokio::test]
+        async fn test_expire_events() {
+            let store: $store_type = $setup_fn().await;
+            let features = store.features();
+
+            if !features.event_expiration {
+                println!("Skipping event expiration tests as the database doesn't support it!");
+                return;
+            }
+
+            let keys = Keys::generate();
+            let event = EventBuilder::new(Kind::TextNote, "Nothing in my mind")
+                .tag(Tag::expiration(Timestamp::now() - 10))
+                .finalize(&keys)
+                .unwrap();
+
+            assert!(
+                store.save_event(&event).await.unwrap().is_success(),
+                "Database should not check if the event is expired"
+            );
+
+            let count = store
+                .count(Filter::new().author(keys.public_key()))
+                .await
+                .unwrap();
+            assert_eq!(count, 1, "We stored a single event");
+
+            // Remove expired events
+            store.collect_garbage().await.unwrap();
+
+            let count = store
+                .count(Filter::new().author(keys.public_key()))
+                .await
+                .unwrap();
+            assert_eq!(count, 0, "Garbage collected");
+        }
     };
 }

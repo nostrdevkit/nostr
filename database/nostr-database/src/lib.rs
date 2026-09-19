@@ -198,4 +198,9 @@ pub trait NostrDatabase: Any + Debug + Send + Sync {
 
     /// Wipe all data
     fn wipe(&self) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + '_>>;
+
+    /// Cleans up expired events and other unused resources.
+    fn collect_garbage(&self) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + '_>> {
+        Box::pin(async { Ok(()) })
+    }
 }

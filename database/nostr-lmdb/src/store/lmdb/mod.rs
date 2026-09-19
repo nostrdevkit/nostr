@@ -22,12 +22,13 @@ use super::error::{MigrationError, StoreError};
 use super::event::DatabaseEvent;
 use super::filter::DatabaseFilter;
 use crate::NostrLmdbBuilder;
+use crate::store::event::DatabaseTag;
 
 const EVENT_ID_ALL_ZEROS: [u8; 32] = [0; 32];
 const EVENT_ID_ALL_255: [u8; 32] = [255; 32];
 
 /// Current database schema version
-const DB_VERSION: u64 = 2;
+const DB_VERSION: u64 = 3;
 const DB_VERSION_KEY: &[u8] = b"db_version";
 
 #[derive(Debug)]
@@ -109,6 +110,8 @@ pub(crate) struct Lmdb {
     deleted_coordinates: Database<Bytes, U64<NativeEndian>>, // Coordinate, UNIX timestamp
     /// Vanished public keys
     vanished_public_keys: Database<Bytes, Unit>, // Public key
+    /// Event expiration tracker
+    expirations: Database<Bytes, U64<NativeEndian>>, // Event ID, Expiration timestamp
     /// Database metadata (version, etc)
     metadata: Database<Bytes, U64<NativeEndian>>, // Key, Value
 }
@@ -119,7 +122,7 @@ impl Lmdb {
         let env: Env = unsafe {
             EnvOpenOptions::new()
                 .flags(EnvFlags::NO_TLS)
-                .max_dbs(12 + builder.additional_dbs)
+                .max_dbs(13 + builder.additional_dbs)
                 .max_readers(builder.max_readers)
                 .map_size(builder.map_size)
                 .open(builder.path)?
@@ -183,6 +186,11 @@ impl Lmdb {
             .types::<Bytes, Unit>()
             .name("vanished-public-keys")
             .create(&mut txn)?;
+        let expirations = env
+            .database_options()
+            .types::<Bytes, U64<NativeEndian>>()
+            .name("expirations")
+            .create(&mut txn)?;
         let metadata = env
             .database_options()
             .types::<Bytes, U64<NativeEndian>>()
@@ -212,6 +220,7 @@ impl Lmdb {
             deleted_ids,
             deleted_coordinates,
             vanished_public_keys,
+            expirations,
             metadata,
         };
 
@@ -239,6 +248,10 @@ impl Lmdb {
                 // Run migrations sequentially
                 if current_version < 2 {
                     self.migrate_v1_to_v2(&mut txn)?;
+                }
+
+                if current_version < 3 {
+                    self.migrate_v2_to_v3(&mut txn)?;
                 }
 
                 // Update version
@@ -296,6 +309,51 @@ impl Lmdb {
         Ok(())
     }
 
+    /// Migrates the database from schema version 2 to version 3 by building
+    /// an expiration tracker for events with `expiration` tags.
+    fn migrate_v2_to_v3(&self, txn: &mut RwTxn) -> Result<(), StoreError> {
+        tracing::info!("Starting migration to schema v3: Building expiration tracker");
+        tracing::debug!(
+            "Scanning {} total events for expiration tags",
+            self.events.len(txn)?
+        );
+
+        // Collect all events containing expiration timestamps
+        let expiring_events: Vec<([u8; 32], u64)> = {
+            let mut events_with_expiration = Vec::new();
+            for result in self.events.iter(txn)? {
+                let (_, event_bytes) = result?;
+
+                // Decode event
+                if let Ok(event) = DatabaseEvent::from_flatbuf(event_bytes) {
+                    // Extract expiration timestamp from event tags
+                    if let Some(timestamp) = event.tags.iter().find_map(DatabaseTag::expiration) {
+                        events_with_expiration.push((*event.id, timestamp));
+                    }
+                }
+            }
+            events_with_expiration
+        };
+
+        tracing::info!(
+            "Found {} events with expiration tags",
+            expiring_events.len(),
+        );
+
+        // Build expiration index
+        tracing::debug!("Building expiration index entries");
+        for (event_id, expire_at) in expiring_events.iter() {
+            self.expirations.put(txn, event_id, expire_at)?;
+        }
+
+        tracing::info!(
+            "Successfully migrated to schema v3: Created expiration tracker with {} entries",
+            expiring_events.len()
+        );
+
+        Ok(())
+    }
+
     /// Get a read transaction
     ///
     /// This should never block the current thread
@@ -334,9 +392,17 @@ impl Lmdb {
         self.kc_index.put(txn, &index.kc_index, &index.id)?;
 
         for tag in index.tags.into_iter() {
-            self.atc_index.put(txn, &tag.atc_index, &index.id)?;
-            self.ktc_index.put(txn, &tag.ktc_index, &index.id)?;
-            self.tc_index.put(txn, &tag.tc_index, &index.id)?;
+            // If the tag is indexable means it is a single letter tag that we index
+            if tag.is_indexable {
+                self.atc_index.put(txn, &tag.atc_index, &index.id)?;
+                self.ktc_index.put(txn, &tag.ktc_index, &index.id)?;
+                self.tc_index.put(txn, &tag.tc_index, &index.id)?;
+            }
+
+            // The expiration tag is not indexable, it's just in the `expirations` tracker
+            if let Some(ref timestamp) = tag.expiration {
+                self.expirations.put(txn, &index.id, timestamp)?;
+            }
         }
 
         Ok(())
@@ -368,9 +434,12 @@ impl Lmdb {
 
         // Delete tag indexes
         for tag in &index.tags {
-            self.atc_index.delete(txn, &tag.atc_index)?;
-            self.ktc_index.delete(txn, &tag.ktc_index)?;
-            self.tc_index.delete(txn, &tag.tc_index)?;
+            if tag.is_indexable {
+                self.atc_index.delete(txn, &tag.atc_index)?;
+                self.ktc_index.delete(txn, &tag.ktc_index)?;
+                self.tc_index.delete(txn, &tag.tc_index)?;
+            }
+            self.expirations.delete(txn, &index.id)?;
         }
 
         Ok(())
@@ -397,6 +466,7 @@ impl Lmdb {
         self.deleted_ids.clear(txn)?;
         self.deleted_coordinates.clear(txn)?;
         self.vanished_public_keys.clear(txn)?;
+        self.expirations.clear(txn)?;
         Ok(())
     }
 
@@ -545,6 +615,41 @@ impl Lmdb {
 
         // Now we can safely mutate the transaction
         for index in indexes {
+            self.remove(txn, &index)?;
+        }
+
+        Ok(())
+    }
+
+    /// Delete expired events
+    pub fn delete_expired(&self, txn: &mut RwTxn) -> Result<(), StoreError> {
+        tracing::info!(
+            "Processing {} events that can expire",
+            self.expirations.len(txn)?
+        );
+
+        // Collect all expired events
+        let expired_indexes = {
+            let now = Timestamp::now().as_secs();
+            let mut expired = Vec::new();
+            for result in self.expirations.iter(txn)? {
+                let (event_id, expire_at) = result?;
+                if now >= expire_at {
+                    if let Some(event_index_keys) = self
+                        .get_event_by_id(txn, event_id)?
+                        .map(EventIndexKeys::new)
+                    {
+                        expired.push(event_index_keys);
+                    }
+                }
+            }
+            expired
+        };
+
+        tracing::info!("Found {} expired events", expired_indexes.len());
+
+        // Remove them, we can safely mutate the transaction
+        for index in expired_indexes {
             self.remove(txn, &index)?;
         }
 

@@ -27,6 +27,12 @@
 
 -->
 
+## Unreleased
+
+### Added
+
+- New function to collect garbage `NostrDatabase::collect_garbage` (https://github.com/nostrdevkit/nostr/pull/1474)
+
 ## v0.45.1 - 2026/08/07
 
 ### Fixed

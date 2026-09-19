@@ -191,6 +191,11 @@ impl NostrDatabase for NdbDatabase {
     fn wipe(&self) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + '_>> {
         Box::pin(async move { Err(Error::unsupported("wiping is not supported by nostrdb")) })
     }
+
+    #[inline]
+    fn collect_garbage(&self) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + '_>> {
+        Box::pin(async move { Err(Error::unsupported("delete is not supported by nostrdb")) })
+    }
 }
 
 fn ndb_query<'a>(

@@ -180,7 +180,7 @@ impl NostrDatabase for NostrLmdb {
     fn features(&self) -> Features {
         Features {
             persistent: true,
-            event_expiration: false,
+            event_expiration: true,
             full_text_search: true,
             request_to_vanish: true,
         }
@@ -238,6 +238,13 @@ impl NostrDatabase for NostrLmdb {
     #[inline]
     fn wipe(&self) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + '_>> {
         Box::pin(async move { Ok(self.db.wipe().await?) })
+    }
+
+    fn collect_garbage(&self) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + '_>> {
+        Box::pin(async move {
+            self.db.delete_expired().await?;
+            Ok(())
+        })
     }
 }
 

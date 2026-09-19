@@ -18,10 +18,14 @@ const KIND_BE: usize = 2;
 const TAG_VALUE_PAD_LEN: usize = 182;
 
 // TODO: use fixed-size arrays instead of vectors
+// TODO: convert `TagIndexKeySet` to an enum instead of `is_indexable`?
 pub(super) struct TagIndexKeySet {
+    /// Whether the tag is indexable
+    pub(super) is_indexable: bool,
     pub(super) atc_index: Vec<u8>,
     pub(super) ktc_index: Vec<u8>,
     pub(super) tc_index: Vec<u8>,
+    pub(super) expiration: Option<u64>,
 }
 
 // TODO: use fixed-size arrays instead of vectors
@@ -49,7 +53,7 @@ impl EventIndexKeys {
         // Index by kind (with created_at and id)
         let kc_index: Vec<u8> = make_kc_index_key(event.kind, event.created_at, event.id);
 
-        let tags = event
+        let mut tags: Vec<TagIndexKeySet> = event
             .tags
             .iter()
             .filter_map(|t| t.extract())
@@ -77,12 +81,29 @@ impl EventIndexKeys {
                     make_tc_index_key(&tag_name, tag_value, event.created_at, event.id);
 
                 TagIndexKeySet {
+                    is_indexable: true,
                     atc_index,
                     ktc_index,
                     tc_index,
+                    expiration: None,
                 }
             })
             .collect();
+
+        // Collect expiration tags, they can't be with `tags` because it's not a single letter tag
+        let expiration_tags = event
+            .tags
+            .iter()
+            .filter_map(|t| t.expiration())
+            .map(|expire_at| TagIndexKeySet {
+                is_indexable: false,
+                atc_index: Vec::new(),
+                ktc_index: Vec::new(),
+                tc_index: Vec::new(),
+                expiration: Some(expire_at),
+            });
+        // Extend the tags with expiration tags
+        tags.extend(expiration_tags);
 
         Self {
             id: *event.id,
