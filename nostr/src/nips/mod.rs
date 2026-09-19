@@ -61,6 +61,7 @@ pub mod nip94;
 #[cfg(feature = "nip98")]
 pub mod nip98;
 pub mod nipa0;
+pub mod nipa3;
 pub mod nipb0;
 pub mod nipb7;
 pub mod nipc0;
