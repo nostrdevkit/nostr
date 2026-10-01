@@ -29,6 +29,10 @@
 
 ## Unreleased
 
+### Breaking change
+
+- Redesign `Relay::count_events` API
+
 ### Added
 
 - Add `LocalRelay::connections_left` (https://github.com/nostrdevkit/nostr/pull/1459)
