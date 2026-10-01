@@ -4,15 +4,13 @@ use std::cmp;
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::net::SocketAddr;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_utility::time;
-use futures::{Stream, StreamExt};
 use nostr_database::prelude::*;
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::broadcast;
 
 mod api;
 mod builder;
@@ -211,35 +209,23 @@ impl Relay {
     ///
     /// The stream terminates when the relay shutdowns or is banned.
     ///
+    /// Notifications lost when this receiver falls behind are skipped.
+    ///
     /// <div class="warning">When you call this method, you subscribe to the notifications channel from that precise moment. Anything received by relay/s before that moment is not included in the channel!</div>
     #[inline]
-    pub fn notifications(&self) -> Pin<Box<dyn Stream<Item = RelayNotification> + Send>> {
+    pub fn notifications(&self) -> NotificationStream<RelayNotification> {
         // If the relay is permanently unusable, return an empty stream
         let status: RelayStatus = self.status();
         if status.is_banned() || status.is_shutdown() {
-            return Box::pin(futures::stream::empty());
+            return NotificationStream::empty();
         }
 
         // Subscribe to notifications
         let rx = self.inner.internal_notification_sender.subscribe();
 
-        // Create a oneshot channel
-        let (tx, rx_done) = oneshot::channel();
-        let mut tx: Option<oneshot::Sender<()>> = Some(tx);
-
-        Box::pin(
-            NotificationStream::new(rx)
-                .inspect(move |notification| {
-                    if let RelayNotification::RelayStatus { status } = &notification {
-                        if status.is_banned() || status.is_shutdown() {
-                            // Take the sender and send the oneshot notification
-                            if let Some(tx) = tx.take() {
-                                let _ = tx.send(());
-                            }
-                        }
-                    }
-                })
-                .take_until(rx_done),
+        NotificationStream::new(
+            rx,
+            |notification| matches!(notification, RelayNotification::RelayStatus { status } if status.is_banned() || status.is_shutdown()),
         )
     }
 
@@ -432,6 +418,7 @@ mod tests {
     use std::sync::Arc;
 
     use async_utility::time;
+    use futures::StreamExt;
 
     use super::*;
     use crate::error::{Error, ErrorKind};

@@ -12,7 +12,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_utility::time;
-use futures_core::stream::BoxStream;
 use nostr::nips::nip04::AsyncNip04;
 use nostr::nips::nip44::{self, AsyncNip44};
 use nostr::nips::nip46::{
@@ -155,7 +154,7 @@ impl NostrConnect {
         Ok(remote_signer_public_key)
     }
 
-    async fn subscribe(&self) -> Result<BoxStream<'_, ClientNotification>, Error> {
+    async fn subscribe(&self) -> Result<NotificationStream<ClientNotification>, Error> {
         let public_key: PublicKey = self.client_keys.public_key();
 
         let filter = Filter::new()
@@ -163,7 +162,7 @@ impl NostrConnect {
             .kind(Kind::NostrConnect)
             .limit(0);
 
-        let notifications = self.client.notifications();
+        let notifications: NotificationStream<ClientNotification> = self.client.notifications();
 
         // Subscribe
         self.client.subscribe(filter).await?;
@@ -392,7 +391,7 @@ impl NostrConnect {
 async fn get_remote_signer_public_key(
     client_keys: &Keys,
     expected_secret: &str,
-    mut notifications: BoxStream<'_, ClientNotification>,
+    mut notifications: NotificationStream<ClientNotification>,
     timeout: Duration,
 ) -> Result<PublicKey, Error> {
     time::timeout(Some(timeout), async {

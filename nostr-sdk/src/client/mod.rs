@@ -6,14 +6,11 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::pin::Pin;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use futures::{Stream, StreamExt};
 use nostr::prelude::*;
 use nostr_database::prelude::*;
-use tokio::sync::oneshot;
 
 mod api;
 mod builder;
@@ -194,32 +191,18 @@ impl Client {
     ///
     /// The stream terminates when the client shutdowns.
     ///
+    /// Notifications lost when this receiver falls behind are skipped.
+    ///
     /// <div class="warning">When you call this method, you subscribe to the notifications channel from that precise moment. Anything received by relay/s before that moment is not included in the channel!</div>
     #[inline]
-    pub fn notifications(&self) -> Pin<Box<dyn Stream<Item = ClientNotification> + Send>> {
+    pub fn notifications(&self) -> NotificationStream<ClientNotification> {
         if self.is_shutdown() {
-            return Box::pin(futures::stream::empty());
+            return NotificationStream::empty();
         }
 
         // Subscribe to notifications
         let rx = self.pool().notifications();
-
-        // Create a oneshot channel
-        let (tx, rx_done) = oneshot::channel();
-        let mut tx: Option<oneshot::Sender<()>> = Some(tx);
-
-        Box::pin(
-            NotificationStream::new(rx)
-                .inspect(move |notification| {
-                    if let ClientNotification::Shutdown = &notification {
-                        // Take the sender and send the oneshot notification
-                        if let Some(tx) = tx.take() {
-                            let _ = tx.send(());
-                        }
-                    }
-                })
-                .take_until(rx_done),
-        )
+        NotificationStream::new(rx, |notification| notification.is_shutdown())
     }
 
     /// Get relays from the relay pool.
@@ -1190,6 +1173,7 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
+    use futures::StreamExt;
     use nostr_gossip_memory::prelude::*;
 
     use super::*;

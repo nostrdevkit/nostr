@@ -39,3 +39,10 @@ pub enum ClientNotification {
     /// This notification variant is sent after [`Client::shutdown`](super::Client::shutdown) method is called and all connections have been closed.
     Shutdown,
 }
+
+impl ClientNotification {
+    #[inline]
+    pub(super) fn is_shutdown(&self) -> bool {
+        matches!(self, Self::Shutdown)
+    }
+}

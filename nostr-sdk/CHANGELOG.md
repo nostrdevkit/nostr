@@ -32,6 +32,7 @@
 ### Breaking change
 
 - Redesign `Relay::count_events` API
+- Return `NotificationStream<T>` from client and relay `notifications()` methods instead of a boxed stream.
 
 ### Added
 

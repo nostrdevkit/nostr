@@ -20,7 +20,7 @@ pub mod prelude;
 pub mod proxy;
 pub mod relay;
 mod shared;
-mod stream;
+pub mod stream;
 #[cfg(test)]
 mod test_utils;
 pub mod transport;

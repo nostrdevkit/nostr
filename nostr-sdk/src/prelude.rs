@@ -23,4 +23,5 @@ pub use crate::policy::*;
 #[cfg(not(target_arch = "wasm32"))]
 pub use crate::proxy::{self, *};
 pub use crate::relay::{self, *};
+pub use crate::stream::{self, *};
 pub use crate::*;
