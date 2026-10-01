@@ -192,8 +192,35 @@ impl Client {
     /// The stream terminates when the client shutdowns.
     ///
     /// Notifications lost when this receiver falls behind are skipped.
+    /// Use [`NotificationStream::with_gaps`] to observe such losses.
     ///
     /// <div class="warning">When you call this method, you subscribe to the notifications channel from that precise moment. Anything received by relay/s before that moment is not included in the channel!</div>
+    ///
+    /// # Examples
+    ///
+    /// ## Report notification gaps
+    ///
+    /// ```rust,no_run
+    /// # use nostr_sdk::prelude::*;
+    /// # async fn example(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
+    /// // Create the stream before subscribing so it can observe the response.
+    /// let mut notifications = client.notifications().with_gaps();
+    /// client.subscribe(Filter::new().kind(Kind::TextNote)).await?;
+    ///
+    /// while let Some(update) = notifications.next().await {
+    ///     match update {
+    ///         Ok(ClientNotification::Event { event, .. }) => println!("{}", event.id),
+    ///         Ok(ClientNotification::Shutdown) => break,
+    ///         Ok(_) => {}
+    ///         Err(gap) => {
+    ///             eprintln!("Skipped {} notifications", gap.skipped);
+    ///             // Reacquire any subscription coverage the application requires.
+    ///         }
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     #[inline]
     pub fn notifications(&self) -> NotificationStream<ClientNotification> {
         if self.is_shutdown() {

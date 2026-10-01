@@ -210,6 +210,7 @@ impl Relay {
     /// The stream terminates when the relay shutdowns or is banned.
     ///
     /// Notifications lost when this receiver falls behind are skipped.
+    /// Use [`NotificationStream::with_gaps`] to observe such losses.
     ///
     /// <div class="warning">When you call this method, you subscribe to the notifications channel from that precise moment. Anything received by relay/s before that moment is not included in the channel!</div>
     #[inline]
