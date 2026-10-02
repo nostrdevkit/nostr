@@ -239,23 +239,15 @@ impl Relay {
     /// Otherwise, the connection task will be spawned, which will attempt to connect to relay.
     ///
     /// This method returns immediately and doesn't provide any information on if the connection was successful or not.
+    /// A request made while the previous task is stopping is retained and starts
+    /// after that task releases ownership.
     ///
     /// # Automatic reconnection
     ///
     /// By default, in case of disconnection, the connection task will automatically attempt to reconnect.
     /// This behavior can be disabled by changing [`RelayOptions::reconnect`] option.
     pub fn connect(&self) {
-        // Immediately return if can't connect
-        if !self.status().can_connect() {
-            return;
-        }
-
-        // Update status
-        // Change it to pending to avoid issues with the health check (initialized check)
-        self.inner.set_status(RelayStatus::Pending, false);
-
-        // Spawn connection task
-        self.inner.spawn_connection_task(None);
+        self.inner.request_connect();
     }
 
     /// Waits for relay connection
@@ -313,6 +305,8 @@ impl Relay {
     /// regardless of whether the initial connection succeeds.
     ///
     /// Returns an error if the connection fails or if the relay has been banned.
+    /// If an older connection task still owns the relay, this returns a state
+    /// error and queues a fresh reconnect rather than claiming the new socket.
     ///
     /// # Automatic reconnection
     ///
@@ -324,6 +318,10 @@ impl Relay {
     }
 
     /// Disconnect from relay and set status to [`RelayStatus::Terminated`].
+    ///
+    /// This requests termination; the old connection task may still be
+    /// releasing its resources when this method returns. A subsequent
+    /// [`Relay::connect`] request is retained during that interval.
     #[inline]
     pub fn disconnect(&self) {
         self.inner.disconnect()
@@ -731,7 +729,6 @@ mod tests {
         relay.ban();
 
         assert_eq!(relay.status(), RelayStatus::Banned);
-        assert!(!relay.inner.is_running());
 
         // Retry to connect
         let res = relay.try_connect().timeout(Duration::from_secs(2)).await;

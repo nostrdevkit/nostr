@@ -55,7 +55,11 @@ pub enum RelayStatus {
     Connected = 3,
     /// The connection failed, but another attempt will occur soon.
     Disconnected = 4,
-    /// The connection has been terminated and no retry will occur.
+    /// Termination was requested and no automatic retry will occur.
+    ///
+    /// This status does not mean that the previous connection task has exited
+    /// or that its WebSocket has finished closing. Use [`Relay::connect`](crate::relay::Relay::connect)
+    /// to queue a new connection while that task releases ownership.
     Terminated = 5,
     /// The relay has been banned.
     Banned = 6,

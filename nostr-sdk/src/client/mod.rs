@@ -431,7 +431,12 @@ impl Client {
         let _ = self.remove_all_relays().force().await;
     }
 
-    /// Connect to a previously added relay
+    /// Connect to a previously added relay.
+    ///
+    /// This queues a connection request and returns before the relay is
+    /// connected. After [`Client::disconnect_relay`], it also works while the
+    /// previous connection task is still closing. Observe a fresh connected
+    /// status or live subscription traffic before treating the relay as ready.
     #[inline]
     pub async fn connect_relay<'a, U>(&self, url: U) -> Result<(), Error>
     where
@@ -442,7 +447,13 @@ impl Client {
         self.pool().connect_relay(&url).await
     }
 
-    /// Try to connect to a previously added relay
+    /// Try to connect to a previously added relay.
+    ///
+    /// This is a one-shot connection attempt, not a task-exit barrier. If the
+    /// previous task still owns the relay after [`Client::disconnect_relay`],
+    /// it returns a state error and queues a fresh connection. Use
+    /// [`Client::connect_relay`] for immediate reactivation without retiring
+    /// and replacing the relay object.
     #[inline]
     pub async fn try_connect_relay<'a, U>(&self, url: U, timeout: Duration) -> Result<(), Error>
     where
@@ -453,7 +464,10 @@ impl Client {
         self.pool().try_connect_relay(&url, timeout).await
     }
 
-    /// Disconnect relay
+    /// Disconnect relay.
+    ///
+    /// This requests termination and publishes `Terminated` status, but does
+    /// not wait for the connection task or WebSocket close to finish.
     #[inline]
     pub async fn disconnect_relay<'a, U>(&self, url: U) -> Result<(), Error>
     where

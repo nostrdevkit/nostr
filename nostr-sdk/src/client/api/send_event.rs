@@ -446,6 +446,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use nostr::nips::nip17::InboxRelayList;
     use nostr::nips::nip65::RelayList;
     use nostr::prelude::*;
@@ -454,9 +456,84 @@ mod tests {
     use nostr_gossip_memory::store::NostrGossipMemory;
 
     use super::*;
+    use crate::authenticator::SignerAuthenticator;
     use crate::client::{GossipConfig, GossipRelayLimits};
     use crate::error::ErrorKind;
     use crate::local_relay::*;
+    use crate::test_utils::{setup_client, setup_client_with_authenticator};
+
+    #[tokio::test]
+    async fn auth_gated_clients_keep_independent_signers_across_removal_and_reconnect() {
+        let local = LocalRelay::builder()
+            .nip42(LocalRelayBuilderNip42::write())
+            .build();
+        local.run().await.unwrap();
+        let url = local.url().await;
+
+        let first_keys = Keys::generate();
+        let second_keys = Keys::generate();
+        let first = setup_client_with_authenticator(
+            url.clone(),
+            SignerAuthenticator::new(first_keys.clone()),
+        )
+        .await;
+        let second = setup_client_with_authenticator(
+            url.clone(),
+            SignerAuthenticator::new(second_keys.clone()),
+        )
+        .await;
+        let unauthenticated = setup_client(url.clone()).await;
+
+        for (client, keys, content) in [
+            (&first, &first_keys, "first account"),
+            (&second, &second_keys, "second account"),
+        ] {
+            let event = EventBuilder::new(Kind::TextNote, content)
+                .tag(Tag::protected())
+                .finalize(keys)
+                .unwrap();
+            let output = client
+                .send_event(&event)
+                .ok_timeout(Duration::from_secs(2))
+                .authentication_timeout(Duration::from_secs(2))
+                .await
+                .unwrap();
+            assert!(output.failed.is_empty());
+            assert!(output.success.get(&url).unwrap().is_ack());
+        }
+
+        let unauthenticated_event = EventBuilder::new(Kind::TextNote, "no signer")
+            .tag(Tag::protected())
+            .finalize(&Keys::generate())
+            .unwrap();
+        let output = unauthenticated
+            .send_event(&unauthenticated_event)
+            .ok_timeout(Duration::from_secs(2))
+            .await
+            .unwrap();
+        assert!(output.success.is_empty());
+        assert!(output.failed.contains_key(&url));
+
+        first.remove_relay(&url).force().await.unwrap();
+        second.disconnect().await;
+        second.connect().and_wait(Duration::from_secs(3)).await;
+        assert_eq!(
+            second.relay(&url).await.unwrap().unwrap().status(),
+            crate::relay::RelayStatus::Connected
+        );
+        let event = EventBuilder::new(Kind::TextNote, "second account after reconnect")
+            .tag(Tag::protected())
+            .finalize(&second_keys)
+            .unwrap();
+        let output = second
+            .send_event(&event)
+            .ok_timeout(Duration::from_secs(2))
+            .authentication_timeout(Duration::from_secs(2))
+            .await
+            .unwrap();
+        assert!(output.failed.is_empty(), "{:?}", output.failed);
+        assert!(output.success.get(&url).unwrap().is_ack());
+    }
 
     #[tokio::test]
     async fn unverified_event_is_rejected_before_sending() {

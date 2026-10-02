@@ -43,6 +43,10 @@
 
 ### Fixed
 
+- Preserve reconnect requests made while a terminated connection task is still
+  releasing ownership, instead of leaving the relay pending with no task.
+- Restore long-lived subscriptions on immediate reconnect even when both
+  connections occur within one second.
 - Require a correlated COUNT response before `Relay::count_events` returns a count.
 - Preserve the broadcast lag or closure cause in event `OK` and authentication waiters instead of returning a generic premature-exit error.
 - Clean up NIP-77 request-owned subscriptions when reconciliation fails or is canceled.
