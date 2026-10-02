@@ -13,7 +13,10 @@ use crate::relay::{RelayCapabilities, SyncOptions, SyncSummary as RelaySyncSumma
 
 /// Client negentropy reconciliation summary
 ///
-/// This includes the summary for all relays involved in the reconciliation process.
+/// This includes observed progress from all relays involved in reconciliation,
+/// including relays listed as failed in the operation's `Output::failed` map.
+/// A failed relay's progress does not establish completion for the selected
+/// filter/window or downstream durable admission.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SyncSummary {
     /// Events that were stored locally (missing on relay)
@@ -200,10 +203,113 @@ where
 
 #[cfg(test)]
 mod tests {
-    use nostr::event::Kind;
+    use std::future::Future;
+    use std::net::SocketAddr;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use nostr::event::{EventBuilder, FinalizeEvent, Kind};
+    use nostr::key::Keys;
+    use nostr::message::MachineReadablePrefix;
 
     use super::*;
     use crate::error::ErrorKind;
+    use crate::local_relay::{LocalRelay, QueryPolicy, QueryPolicyResult};
+
+    #[derive(Debug, Default)]
+    struct RejectSecondDownload {
+        batches: AtomicUsize,
+    }
+
+    impl QueryPolicy for RejectSecondDownload {
+        fn admit_query<'a>(
+            &'a self,
+            query: &'a mut Filter,
+            _addr: &'a SocketAddr,
+        ) -> Pin<Box<dyn Future<Output = QueryPolicyResult> + Send + 'a>> {
+            let reject: bool =
+                query.ids.is_some() && self.batches.fetch_add(1, Ordering::SeqCst) > 0;
+            Box::pin(async move {
+                if reject {
+                    QueryPolicyResult::reject(
+                        MachineReadablePrefix::Blocked,
+                        "second batch rejected",
+                    )
+                } else {
+                    QueryPolicyResult::Accept
+                }
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn aggregate_sync_retains_failed_relay_progress() {
+        let healthy = LocalRelay::new();
+        let failing = LocalRelay::builder()
+            .query_policy(RejectSecondDownload::default())
+            .build();
+        healthy.run().await.unwrap();
+        failing.run().await.unwrap();
+        let keys: Keys = Keys::generate();
+        for index in 0..101 {
+            let event = EventBuilder::new(Kind::TextNote, format!("remote {index}"))
+                .finalize(&keys)
+                .unwrap();
+            healthy.add_event(event.clone()).await.unwrap();
+            failing.add_event(event).await.unwrap();
+        }
+        let healthy_url = healthy.url().await;
+        let failing_url = failing.url().await;
+        let client: Client = Client::new();
+        client.add_relay(&healthy_url).and_connect().await.unwrap();
+        client.add_relay(&failing_url).and_connect().await.unwrap();
+        let output = client
+            .sync(Filter::new().kind(Kind::TextNote))
+            .opts(
+                SyncOptions::new()
+                    .initial_timeout(Duration::from_secs(2))
+                    .idle_timeout(Duration::from_secs(2)),
+            )
+            .await
+            .unwrap();
+        assert!(output.success.contains_key(&healthy_url));
+        assert!(
+            output
+                .failed
+                .get(&failing_url)
+                .unwrap()
+                .contains("second batch rejected")
+        );
+        assert_eq!(output.received.len(), 101);
+        assert_eq!(
+            output
+                .received
+                .values()
+                .filter(|urls| urls.contains(&healthy_url))
+                .count(),
+            101
+        );
+        assert_eq!(
+            output
+                .received
+                .values()
+                .filter(|urls| urls.contains(&failing_url))
+                .count(),
+            100
+        );
+        assert_eq!(
+            output
+                .remote
+                .values()
+                .filter(|urls| urls.contains(&failing_url))
+                .count(),
+            101
+        );
+        client.shutdown().await;
+        healthy.shutdown();
+        failing.shutdown();
+    }
 
     #[tokio::test]
     async fn test_sync_with_empty_list_of_relays() {

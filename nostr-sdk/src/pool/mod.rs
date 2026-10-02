@@ -706,7 +706,7 @@ impl RelayPool {
                     .sync(filter)
                     .items(items)
                     .opts(opts.clone())
-                    .into_future(),
+                    .with_outcomes(),
             );
         }
 
@@ -717,9 +717,12 @@ impl RelayPool {
         for (url, result) in urls.into_iter().zip(list) {
             match result {
                 Ok(reconciliation) => {
-                    // Success, insert relay url in 'success' set result
-                    output.success.insert(url.clone(), ());
-                    output.merge_relay_summary(url, reconciliation);
+                    if let Some(error) = reconciliation.error {
+                        output.failed.insert(url.clone(), error.to_string());
+                    } else {
+                        output.success.insert(url.clone(), ());
+                    }
+                    output.merge_relay_summary(url, reconciliation.summary);
                 }
                 Err(e) => {
                     output.failed.insert(url, e.to_string());

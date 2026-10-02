@@ -83,6 +83,20 @@ pub struct SyncSummary {
     // pub receive: HashMap<EventId, Vec<String>>,
 }
 
+/// Reconciliation progress and its terminal result for one relay.
+///
+/// Progress may be useful after failure. A missing terminal error means the
+/// reconciliation loop completed; inspect `summary.send_failures` for individual
+/// publication failures. Received events are not evidence of downstream durable
+/// admission.
+#[derive(Debug)]
+pub struct RelaySyncOutcome {
+    /// Progress observed before completion or failure.
+    pub summary: SyncSummary,
+    /// Failure that interrupted reconciliation, if any.
+    pub error: Option<Error>,
+}
+
 /// Sync events with relay
 ///
 /// <https://github.com/nostr-protocol/nips/blob/master/77.md>
@@ -122,6 +136,30 @@ impl<'relay> SyncEvents<'relay> {
     pub fn opts(mut self, opts: SyncOptions) -> Self {
         self.opts = opts;
         self
+    }
+
+    /// Reconcile while retaining partial progress if the operation fails.
+    ///
+    /// Preflight errors still return `Err` before reconciliation begins.
+    pub async fn with_outcomes(self) -> Result<RelaySyncOutcome, Error> {
+        self.relay.inner.ensure_operational()?;
+        if !self.relay.inner.capabilities.can_read() {
+            return Err(Error::read_disabled());
+        }
+
+        let items: Vec<(EventId, Timestamp)> = match self.items {
+            Some(items) => items,
+            None => {
+                let database = self.relay.inner.state.database();
+                database.negentropy_items(self.filter.clone()).await?
+            }
+        };
+
+        let mut summary: SyncSummary = SyncSummary::default();
+        let error: Option<Error> = sync(self.relay, &self.filter, items, &self.opts, &mut summary)
+            .await
+            .err();
+        Ok(RelaySyncOutcome { summary, error })
     }
 }
 
@@ -668,35 +706,11 @@ impl<'relay> IntoFuture for SyncEvents<'relay> {
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            // Check if relay is operational
-            self.relay.inner.ensure_operational()?;
-
-            // Check if relay can read
-            if !self.relay.inner.capabilities.can_read() {
-                return Err(Error::read_disabled());
+            let outcome = self.with_outcomes().await?;
+            match outcome.error {
+                Some(error) => Err(error),
+                None => Ok(outcome.summary),
             }
-
-            let items: Vec<(EventId, Timestamp)> = match self.items {
-                Some(items) => items,
-                None => {
-                    // Get negentropy items
-                    let database = self.relay.inner.state.database();
-                    database.negentropy_items(self.filter.clone()).await?
-                }
-            };
-
-            let mut output: SyncSummary = SyncSummary::default();
-
-            sync(
-                self.relay,
-                &self.filter,
-                items.clone(),
-                &self.opts,
-                &mut output,
-            )
-            .await?;
-
-            Ok(output)
         })
     }
 }
@@ -721,7 +735,7 @@ mod tests {
     use super::*;
     use crate::error::{Error, ErrorKind};
     use crate::local_relay::{LocalRelay, MockRelay, QueryPolicy, QueryPolicyResult};
-    use crate::relay::{SyncDirection, SyncOptions};
+    use crate::relay::{RelayCapabilities, SyncDirection, SyncOptions};
     use crate::transport::websocket::{
         DefaultWebsocketTransport, WebSocketSink, WebSocketStream, WebSocketTransport,
     };
@@ -1143,7 +1157,7 @@ mod tests {
         relay.shutdown();
     }
 
-    async fn assert_rejected_download_after(allowed_batches: usize) {
+    async fn assert_rejected_download_after(allowed_batches: usize, report_outcomes: bool) {
         let event_count = allowed_batches * NEGENTROPY_BATCH_SIZE_DOWN + 1;
 
         let local = LocalRelay::builder()
@@ -1181,7 +1195,18 @@ mod tests {
         let opts: SyncOptions = SyncOptions::new()
             .initial_timeout(Duration::from_secs(2))
             .idle_timeout(Duration::from_secs(2));
-        let err = relay.sync(filter).opts(opts).await.unwrap_err();
+        let err = if report_outcomes {
+            let outcome: RelaySyncOutcome =
+                relay.sync(filter).opts(opts).with_outcomes().await.unwrap();
+            assert_eq!(outcome.summary.remote.len(), event_count);
+            assert_eq!(
+                outcome.summary.received.len(),
+                allowed_batches * NEGENTROPY_BATCH_SIZE_DOWN
+            );
+            outcome.error.unwrap()
+        } else {
+            relay.sync(filter).opts(opts).await.unwrap_err()
+        };
 
         assert_eq!(err, Error::relay_msg(String::from("blocked: reads denied")));
         assert_eq!(
@@ -1204,12 +1229,45 @@ mod tests {
 
     #[tokio::test]
     async fn rejected_first_download_batch_fails_sync() {
-        assert_rejected_download_after(0).await;
+        assert_rejected_download_after(0, false).await;
     }
 
     #[tokio::test]
     async fn rejected_later_download_batch_fails_sync() {
-        assert_rejected_download_after(1).await;
+        assert_rejected_download_after(1, false).await;
+    }
+
+    #[tokio::test]
+    async fn sync_outcomes_retain_progress_before_rejection() {
+        assert_rejected_download_after(0, true).await;
+        assert_rejected_download_after(1, true).await;
+    }
+
+    #[tokio::test]
+    async fn sync_outcomes_report_success_without_an_error() {
+        let local = LocalRelay::new();
+        local.run().await.unwrap();
+        let relay = Relay::new(local.url().await);
+        relay
+            .try_connect()
+            .timeout(Duration::from_secs(2))
+            .await
+            .unwrap();
+        let outcome: RelaySyncOutcome = relay.sync(Filter::new()).with_outcomes().await.unwrap();
+        assert!(outcome.error.is_none());
+        assert_eq!(outcome.summary, SyncSummary::default());
+        relay.capabilities().remove(RelayCapabilities::READ);
+        let error = relay.sync(Filter::new()).with_outcomes().await.unwrap_err();
+        assert_eq!(error, Error::read_disabled());
+        relay.shutdown();
+        local.shutdown();
+    }
+
+    #[tokio::test]
+    async fn sync_outcomes_reject_preflight_failure() {
+        let relay = Relay::new(RelayUrl::parse("wss://relay.example.com").unwrap());
+        let error = relay.sync(Filter::new()).with_outcomes().await.unwrap_err();
+        assert_eq!(error, Error::not_ready());
     }
 
     #[tokio::test]
