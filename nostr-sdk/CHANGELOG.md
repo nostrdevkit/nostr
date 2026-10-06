@@ -37,6 +37,7 @@
 
 ### Added
 
+- Add `SyncEvents::with_outcomes` to retain partial reconciliation progress with its terminal error.
 - Add `LocalRelay::connections_left` (https://github.com/nostrdevkit/nostr/pull/1459)
 - Add `LocalRelayBuilderNip42::relay_url` to make it possible to configure a custom `relay_url` for the nip42 challenge validation (https://github.com/nostrdevkit/nostr/pull/1476)
 - Add `LocalRelayBuilder::new_event_channel_size` for customizing the size of the channel used to notify new received events
@@ -44,6 +45,7 @@
 
 ### Fixed
 
+- Retain progress from failed relays in aggregate reconciliation summaries.
 - Require a correlated COUNT response before `Relay::count_events` returns a count.
 - Preserve the broadcast lag or closure cause in event `OK` and authentication waiters instead of returning a generic premature-exit error.
 - Clean up NIP-77 request-owned subscriptions when reconciliation fails or is canceled.
