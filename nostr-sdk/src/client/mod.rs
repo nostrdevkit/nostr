@@ -463,15 +463,44 @@ impl Client {
         ConnectRelay::new(self, url)
     }
 
-    /// Try to connect to a previously added relay
+    /// Try to connect to a previously added relay.
+    ///
+    /// Attempts to initiate a connection with a single relay.
+    ///
+    /// At most **one connection per relay** is allowed at any time.
+    /// If the relay is already connected or currently attempting to connect,
+    /// this method does nothing.
+    ///
+    /// If the initial connection attempt succeeds, a background task is spawned
+    /// to maintain the connection and handle future reconnections.
+    /// If the initial attempt fails, no background task is spawned and no
+    /// automatic retries are scheduled.
+    ///
+    /// Use [`Client::connect_relay`] if you want to always spawn a background
+    /// connection task, regardless of whether the initial attempt succeeds.
+    ///
+    /// For further details, see the documentation of [`Relay::try_connect`].
+    ///
+    /// # Configuration
+    ///
+    /// By default:
+    ///
+    /// - Connection timeout is set to 15 secs
+    ///
+    /// To customize this behavior, the returned [`TryConnectRelay`] can be
+    /// configured before awaiting it:
+    ///
+    /// - [`TryConnectRelay::timeout`]: set a maximum timeout
     #[inline]
-    pub async fn try_connect_relay<'a, U>(&self, url: U, timeout: Duration) -> Result<(), Error>
+    pub fn try_connect_relay<'client, 'url, U>(
+        &'client self,
+        url: U,
+    ) -> TryConnectRelay<'client, 'url>
     where
-        U: Into<RelayUrlArg<'a>>,
+        U: Into<RelayUrlArg<'url>>,
     {
-        let url: RelayUrlArg<'a> = url.into();
-        let url: Cow<RelayUrl> = url.try_as_relay_url()?;
-        self.pool().try_connect_relay(&url, timeout).await
+        let url: RelayUrlArg<'url> = url.into();
+        TryConnectRelay::new(self, url)
     }
 
     /// Disconnect relay

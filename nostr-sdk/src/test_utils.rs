@@ -47,7 +47,8 @@ pub(crate) async fn setup_client(url: RelayUrl) -> Client {
 
     client.add_relay(&url).await.unwrap();
     client
-        .try_connect_relay(url, Duration::from_secs(3))
+        .try_connect_relay(url)
+        .timeout(Duration::from_secs(3))
         .await
         .unwrap();
 
@@ -62,7 +63,8 @@ where
 
     client.add_relay(&url).await.unwrap();
     client
-        .try_connect_relay(url, Duration::from_secs(3))
+        .try_connect_relay(url)
+        .timeout(Duration::from_secs(3))
         .await
         .unwrap();
 
