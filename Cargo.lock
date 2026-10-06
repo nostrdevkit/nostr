@@ -114,9 +114,8 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 
 [[package]]
 name = "async-utility"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a34a3b57207a7a1007832416c3e4862378c8451b4e8e093e436f48c2d3d2c151"
+version = "0.3.2"
+source = "git+https://github.com/yukibtc/async-utility?rev=7d3a79983d0e848aafed9d321637af7334e01349#7d3a79983d0e848aafed9d321637af7334e01349"
 dependencies = [
  "futures-util",
  "gloo-timers",

@@ -40,7 +40,7 @@ license = "MIT"
 rust-version = "1.85.0"
 
 [workspace.dependencies]
-async-utility = "0.3"
+async-utility = {  git = "https://github.com/yukibtc/async-utility", rev = "7d3a79983d0e848aafed9d321637af7334e01349" }
 atomic-destructor = { version = "0.3", default-features = false }
 base64 = { version = "0.22", default-features = false }
 bitcoin_hashes = { version = "1.1", default-features = false }
