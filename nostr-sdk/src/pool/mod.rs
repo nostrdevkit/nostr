@@ -334,7 +334,11 @@ impl RelayPool {
         }
     }
 
-    pub(crate) async fn connect_relay(&self, url: &RelayUrl) -> Result<(), Error> {
+    pub(crate) async fn connect_relay(
+        &self,
+        url: &RelayUrl,
+        wait: Option<Duration>,
+    ) -> Result<(), Error> {
         // Lock with read shared access
         let relays = self.relays.read().await;
 
@@ -343,6 +347,10 @@ impl RelayPool {
 
         // Connect
         relay.connect();
+
+        if let Some(wait) = wait {
+            relay.wait_for_connection(wait).await;
+        }
 
         Ok(())
     }

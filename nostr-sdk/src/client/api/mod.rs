@@ -1,5 +1,6 @@
 mod add;
 mod connect;
+mod connect_relay;
 mod fetch_events;
 mod output;
 mod relays;
@@ -18,6 +19,7 @@ mod util;
 
 pub use self::add::*;
 pub use self::connect::*;
+pub use self::connect_relay::*;
 pub use self::fetch_events::*;
 pub use self::output::*;
 pub use self::relays::*;

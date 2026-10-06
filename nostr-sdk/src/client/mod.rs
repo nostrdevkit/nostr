@@ -431,15 +431,36 @@ impl Client {
         let _ = self.remove_all_relays().force().await;
     }
 
-    /// Connect to a previously added relay
+    /// Connect to a previously added relay.
+    ///
+    /// Attempts to initiate a connection with a single relay.
+    ///
+    /// At most **one connection per relay** is allowed at any time.
+    /// If the relay is already connected or currently attempting to connect,
+    /// this method does nothing.
+    ///
+    /// If the relay is disconnected, sleeping, or otherwise inactive, a
+    /// background task is spawned to initiate a connection.
+    ///
+    /// For further details, see the documentation of [`Relay::connect`].
+    ///
+    /// # Configuration
+    ///
+    /// By default:
+    ///
+    /// - Doesn't wait that relays connect
+    ///
+    /// To customize this behavior, the returned [`ConnectRelay`] can be
+    /// configured before awaiting it:
+    ///
+    /// - [`ConnectRelay::and_wait`]: wait for the relay to connect at most for the specified `timeout`
     #[inline]
-    pub async fn connect_relay<'a, U>(&self, url: U) -> Result<(), Error>
+    pub fn connect_relay<'client, 'url, U>(&'client self, url: U) -> ConnectRelay<'client, 'url>
     where
-        U: Into<RelayUrlArg<'a>>,
+        U: Into<RelayUrlArg<'url>>,
     {
-        let url: RelayUrlArg<'a> = url.into();
-        let url: Cow<RelayUrl> = url.try_as_relay_url()?;
-        self.pool().connect_relay(&url).await
+        let url: RelayUrlArg<'url> = url.into();
+        ConnectRelay::new(self, url)
     }
 
     /// Try to connect to a previously added relay
