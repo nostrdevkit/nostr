@@ -94,7 +94,7 @@ async fn receive_count_reply(
                 }
                 _ => {}
             },
-            RelayNotification::RelayStatus { status } if status.is_disconnected() => {
+            RelayNotification::RelayStatus { status } if status.is_connection_closed() => {
                 return Err(Error::not_connected());
             }
             _ => {}

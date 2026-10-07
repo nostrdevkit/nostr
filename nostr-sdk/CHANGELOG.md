@@ -34,6 +34,11 @@
 - Redesign `Relay::count_events` API
 - Redesign `Client::try_connect_relay` API
 - Return `NotificationStream<T>` from client and relay `notifications()` methods instead of a boxed stream.
+- Remove `RelayStatus::Pending` and rename `RelayStatus::Terminated` to `RelayStatus::Idle` (https://github.com/nostrdevkit/nostr/pull/1491).
+
+### Changed
+
+- `Relay::try_connect` waits for an ongoing attempt or scheduled retry (https://github.com/nostrdevkit/nostr/pull/1491).
 
 ### Added
 
@@ -48,6 +53,8 @@
 - Preserve the broadcast lag or closure cause in event `OK` and authentication waiters instead of returning a generic premature-exit error.
 - Clean up NIP-77 request-owned subscriptions when reconciliation fails or is canceled.
 - Fail NIP-77 reconciliation when a download batch is rejected or closes before its requested events arrive.
+- Retain reconnect requests while a previous WebSocket closes (https://github.com/nostrdevkit/nostr/pull/1491).
+- Allow banning and shutting down idle relays (https://github.com/nostrdevkit/nostr/pull/1491).
 
 ### Deprecated
 
