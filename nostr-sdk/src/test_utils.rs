@@ -4,7 +4,9 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use async_wsocket::Message;
-use futures::{Sink, SinkExt};
+use futures::{Sink, SinkExt, StreamExt};
+use nostr::event::EventId;
+use nostr::message::{RelayMessage, SubscriptionId};
 use nostr::types::{RelayUrl, Url};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::{mpsc, oneshot};
@@ -17,7 +19,8 @@ use crate::error::Error;
 use crate::future::BoxedFuture;
 use crate::local_relay::*;
 use crate::policy::{AdmitPolicy, AdmitStatus};
-use crate::relay::{Relay, RelayBuilder, RelayOptions, RelayStatus};
+use crate::relay::{Relay, RelayBuilder, RelayNotification, RelayOptions, RelayStatus};
+use crate::stream::NotificationStream;
 use crate::transport::websocket::{WebSocketSink, WebSocketStream, WebSocketTransport};
 
 pub(crate) type DialReply = oneshot::Sender<Result<(WebSocketSink, WebSocketStream), Error>>;
@@ -46,6 +49,50 @@ where
 pub(crate) async fn wait_for_status(relay: &Relay, status: RelayStatus) {
     wait_until(&format!("relay status {status}"), || {
         relay.status() == status
+    })
+    .await;
+}
+
+async fn wait_for_notification<F>(
+    notifications: &mut NotificationStream<RelayNotification>,
+    description: &str,
+    mut matches: F,
+) where
+    F: FnMut(&RelayNotification) -> bool,
+{
+    time::timeout(TEST_TIMEOUT, async {
+        while let Some(notification) = notifications.next().await {
+            if matches(&notification) {
+                return;
+            }
+        }
+
+        panic!("notification stream closed while waiting for {description}");
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out waiting for {description}"));
+}
+
+pub(crate) async fn wait_for_eose(
+    notifications: &mut NotificationStream<RelayNotification>,
+    subscription: &SubscriptionId,
+) {
+    wait_for_notification(notifications, "subscription EOSE", |notification| {
+        matches!(notification, RelayNotification::Message { message }
+            if matches!(message.as_ref(), RelayMessage::EndOfStoredEvents(id)
+                if id.as_ref() == subscription))
+    })
+    .await;
+}
+
+pub(crate) async fn wait_for_subscription_event(
+    notifications: &mut NotificationStream<RelayNotification>,
+    subscription: &SubscriptionId,
+    event_id: &EventId,
+) {
+    wait_for_notification(notifications, "subscription event", |notification| {
+        matches!(notification, RelayNotification::Event { subscription_id, event }
+            if subscription_id == subscription && event.id == *event_id)
     })
     .await;
 }

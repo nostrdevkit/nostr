@@ -189,7 +189,7 @@ impl RelayChannels {
 #[derive(Debug)]
 struct SubscriptionData {
     pub filters: Vec<Filter>,
-    pub subscribed_at: Timestamp,
+    pub subscribed_connection: usize,
     pub is_auto_closing: bool,
     /// Received EOSE msg
     pub received_eose: bool,
@@ -201,10 +201,10 @@ struct SubscriptionData {
 
 impl SubscriptionData {
     #[inline]
-    fn long_lived(filters: Vec<Filter>) -> Self {
+    fn long_lived(filters: Vec<Filter>, subscribed_connection: usize) -> Self {
         Self {
             filters,
-            subscribed_at: Timestamp::now(),
+            subscribed_connection,
             is_auto_closing: false,
             received_eose: false,
             received_events: AtomicUsize::new(0),
@@ -216,7 +216,7 @@ impl SubscriptionData {
     fn auto_closing(filters: Vec<Filter>) -> Self {
         Self {
             filters,
-            subscribed_at: Timestamp::zero(),
+            subscribed_connection: 0,
             is_auto_closing: true,
             received_eose: false,
             received_events: AtomicUsize::new(0),
@@ -430,7 +430,10 @@ impl InnerRelay {
             return Err(Error::invalid_msg("subscription ID already exists"));
         }
 
-        subscriptions.insert(id, SubscriptionData::long_lived(filters));
+        subscriptions.insert(
+            id,
+            SubscriptionData::long_lived(filters, self.stats.success()),
+        );
 
         Ok(())
     }
@@ -456,7 +459,7 @@ impl InnerRelay {
         &self,
         id: &SubscriptionId,
         filters: Vec<Filter>,
-        update_subscribed_at: bool,
+        mark_subscribed: bool,
     ) -> Result<(), Error> {
         let mut subscriptions = self.atomic.subscriptions.write().await;
         let data = subscriptions
@@ -464,8 +467,8 @@ impl InnerRelay {
             .ok_or_else(|| Error::not_found("subscription not found"))?;
         data.filters = filters;
 
-        if update_subscribed_at {
-            data.subscribed_at = Timestamp::now();
+        if mark_subscribed {
+            data.subscribed_connection = self.stats.success();
             data.closed = false;
         }
 
@@ -508,20 +511,20 @@ impl InnerRelay {
         let subscriptions = self.atomic.subscriptions.read().await;
         match subscriptions.get(id) {
             Some(SubscriptionData {
-                subscribed_at,
+                subscribed_connection,
                 closed,
                 is_auto_closing: false,
                 ..
             }) => {
-                // Never subscribed -> SHOULD subscribe
-                // Subscription closed by relay -> SHOULD subscribe
-                if subscribed_at.is_zero() || *closed {
+                if *closed {
                     return true;
                 }
 
-                // First connection and subscribed_at != 0 -> SHOULD NOT re-subscribe
-                // Many connections and subscription NOT done in current websocket session -> SHOULD re-subscribe
-                self.stats.connected_at() > *subscribed_at && self.stats.success() > 1
+                // The successful connection count identifies the WebSocket session.
+                // Requests queued before the first connection are already in the outbound
+                // channel. Later sessions must restore subscriptions even within one second.
+                let current_connection: usize = self.stats.success();
+                current_connection > 1 && current_connection > *subscribed_connection
             }
             // NOT subscribe if auto-closing subscription or subscription not found
             Some(SubscriptionData {
@@ -2076,12 +2079,16 @@ mod tests {
     use crate::authenticator::SignerAuthenticator;
     use crate::error::{Error, ErrorKind};
     use crate::future::BoxedFuture;
+    use crate::local_relay::MockRelay;
     use crate::policy::{AdmitPolicy, AdmitStatus};
     use crate::relay::{Relay, RelayOptions};
+    use crate::stream::NotificationStream;
     use crate::test_utils::{
         ControlledConnectionPolicy, ControlledRelay, DialReply, PolicyReply, TEST_TIMEOUT,
-        connection_gate_close, fake_connection, start_try_connect, wait_for_status, wait_until,
+        connection_gate_close, fake_connection, start_try_connect, wait_for_eose, wait_for_status,
+        wait_for_subscription_event, wait_until,
     };
+    use crate::transport::websocket::{DefaultWebsocketTransport, WebSocketTransport};
 
     #[derive(Debug)]
     struct CountingAdmitPolicy(Arc<AtomicUsize>);
@@ -2560,18 +2567,33 @@ mod tests {
     }
 
     async fn reconnect_while_closing(opts: RelayOptions, request: ReconnectRequest) {
+        let local: MockRelay = MockRelay::run().await.unwrap();
+        let url: RelayUrl = local.url().await;
+
+        let websocket: DefaultWebsocketTransport = DefaultWebsocketTransport;
+
         let ControlledRelay {
             relay,
             mut transport,
         } = ControlledRelay::with_opts(opts);
 
         let initial: TokioJoinHandle<Result<(), Error>> = start_try_connect(&relay, TEST_TIMEOUT);
+        let reply: DialReply = transport.next_dial().await;
 
-        let (connection, mut close_gate) = connection_gate_close(fake_connection());
+        let connection = websocket.connect((&url).into(), None).await.unwrap();
+        let (connection, mut close_gate) = connection_gate_close(connection);
 
-        assert!(transport.next_dial().await.send(Ok(connection)).is_ok());
+        assert!(reply.send(Ok(connection)).is_ok());
 
         initial.await.unwrap().unwrap();
+
+        let mut notifications: NotificationStream<RelayNotification> = relay.notifications();
+        let keys: Keys = Keys::generate();
+        let subscription: SubscriptionId = relay
+            .subscribe(Filter::new().author(keys.public_key()))
+            .await
+            .unwrap();
+        wait_for_eose(&mut notifications, &subscription).await;
 
         relay.disconnect();
 
@@ -2600,18 +2622,23 @@ mod tests {
 
         close_gate.release();
 
+        let reply: DialReply = transport.next_dial().await;
         assert!(
-            transport
-                .next_dial()
-                .await
-                .send(Ok(fake_connection()))
+            reply
+                .send(websocket.connect((&url).into(), None).await)
                 .is_ok()
         );
-
         if let Some(pending) = pending {
             pending.await.unwrap();
         }
-        wait_for_status(&relay, RelayStatus::Connected).await;
+        wait_for_eose(&mut notifications, &subscription).await;
+
+        let event: Event = EventBuilder::new(Kind::TextNote, "after reconnect")
+            .finalize(&keys)
+            .unwrap();
+        let event_id = event.id;
+        local.add_event(event).await.unwrap();
+        wait_for_subscription_event(&mut notifications, &subscription, &event_id).await;
 
         assert_eq!(relay.stats().attempts(), 2);
         assert_eq!(relay.stats().success(), 2);
@@ -3206,6 +3233,39 @@ mod tests {
 
         assert_eq!(relay.stats().attempts(), 1);
         assert_eq!(relay.stats().success(), 1);
+    }
+
+    #[tokio::test]
+    async fn subscription_restoration_uses_connection_counter() {
+        let relay: Relay = Relay::new(RelayUrl::parse("wss://relay.example.com").unwrap());
+
+        let id: SubscriptionId = SubscriptionId::new("generation");
+        let filters: Vec<Filter> = vec![Filter::new().kind(Kind::TextNote)];
+        relay
+            .inner
+            .add_long_lived_subscription(id.clone(), filters.clone())
+            .await
+            .unwrap();
+
+        relay.inner.stats.new_success();
+
+        assert!(!relay.inner.should_resubscribe(&id).await);
+
+        relay.inner.stats.new_success();
+
+        assert!(relay.inner.should_resubscribe(&id).await);
+
+        relay
+            .inner
+            .update_subscription(&id, filters, true)
+            .await
+            .unwrap();
+
+        assert!(!relay.inner.should_resubscribe(&id).await);
+
+        relay.inner.stats.new_success();
+
+        assert!(relay.inner.should_resubscribe(&id).await);
     }
 }
 
