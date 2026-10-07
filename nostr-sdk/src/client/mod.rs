@@ -439,8 +439,8 @@ impl Client {
     /// If the relay is already connected or currently attempting to connect,
     /// this method does nothing.
     ///
-    /// If the relay is disconnected, sleeping, or otherwise inactive, a
-    /// background task is spawned to initiate a connection.
+    /// If the relay is sleeping or otherwise inactive, its persistent
+    /// connection task is started or woken to initiate a connection.
     ///
     /// For further details, see the documentation of [`Relay::connect`].
     ///
@@ -468,16 +468,14 @@ impl Client {
     /// Attempts to initiate a connection with a single relay.
     ///
     /// At most **one connection per relay** is allowed at any time.
-    /// If the relay is already connected or currently attempting to connect,
-    /// this method does nothing.
+    /// Returns immediately if already connected; otherwise waits for the current
+    /// attempt or next scheduled retry, or requests a connection if inactive.
     ///
-    /// If the initial connection attempt succeeds, a background task is spawned
-    /// to maintain the connection and handle future reconnections.
-    /// If the initial attempt fails, no background task is spawned and no
-    /// automatic retries are scheduled.
+    /// A newly requested attempt that fails does not schedule automatic retries.
+    /// The connection task remains available until ban or shutdown.
+    /// Dropping the future only stops waiting for the result.
     ///
-    /// Use [`Client::connect_relay`] if you want to always spawn a background
-    /// connection task, regardless of whether the initial attempt succeeds.
+    /// Use [`Client::connect_relay`] to enable retries after an initial failure.
     ///
     /// For further details, see the documentation of [`Relay::try_connect`].
     ///
@@ -522,8 +520,8 @@ impl Client {
     /// If a relay is already connected or currently attempting to connect,
     /// this method does nothing for that relay.
     ///
-    /// If a relay is disconnected, sleeping, or otherwise inactive, a
-    /// background task is spawned to initiate a connection.
+    /// If a relay is sleeping or otherwise inactive, its persistent
+    /// connection task is started or woken to initiate a connection.
     ///
     /// For further details, see the documentation of [`Relay::connect`].
     ///
@@ -561,16 +559,14 @@ impl Client {
     /// Attempts to initiate a connection with relays.
     ///
     /// At most **one connection per relay** is allowed at any time.
-    /// If a relay is already connected or currently attempting to connect,
-    /// this method does nothing for that relay.
+    /// Returns immediately for connected relays. For other relays, waits for
+    /// the current attempt or next scheduled retry, or requests a connection if inactive.
     ///
-    /// If the initial connection attempt succeeds, a background task is spawned
-    /// to maintain the connection and handle future reconnections.
-    /// If the initial attempt fails, no background task is spawned and no
-    /// automatic retries are scheduled.
+    /// A newly requested attempt that fails does not schedule automatic retries.
+    /// Connection tasks remain available until ban or shutdown.
+    /// Dropping the future only stops waiting for results.
     ///
-    /// Use [`Client::connect`] if you want to always spawn a background
-    /// connection task, regardless of whether the initial attempt succeeds.
+    /// Use [`Client::connect`] to enable retries after an initial failure.
     ///
     /// For further details, see the documentation of [`Relay::try_connect`].
     ///

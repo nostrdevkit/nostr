@@ -1,12 +1,13 @@
 use std::borrow::Cow;
-use std::cmp;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
+use std::{cmp, ptr};
 
-use async_utility::{task, time};
+use async_utility::task::{self, JoinHandle};
+use async_utility::time;
 use async_wsocket::Message;
 use futures::{self, SinkExt, StreamExt};
 use nostr::filter::MatchEventOptions;
@@ -18,6 +19,7 @@ use rand::Rng;
 use rand::RngExt;
 use rand::rand_core::UnwrapErr;
 use rand::rngs::SysRng;
+use tokio::sync::futures::Notified;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::sync::{Mutex, MutexGuard, Notify, RwLock, RwLockWriteGuard, broadcast, oneshot, watch};
 use universal_time::Instant;
@@ -35,13 +37,14 @@ use super::{
     SubscriptionAutoClosedReason,
 };
 use crate::client::ClientNotification;
-use crate::error::Error;
+use crate::error::{Error, ErrorKind};
+use crate::mutex::{NonPoisoningMutex, NonPoisoningMutexGuard};
 use crate::policy::AdmitStatus;
-use crate::relay::status::AtomicRelayStatus;
 use crate::shared::SharedState;
 use crate::transport::websocket::{WebSocketSink, WebSocketStream};
 
 type ClientMessageJson = String;
+type ConnectionResult = Result<(), Arc<Error>>;
 
 // Skip NIP-50 matches since they may create issues and ban non-malicious relays.
 const MATCH_EVENT_OPTS: MatchEventOptions = MatchEventOptions::new().nip50(false);
@@ -67,10 +70,90 @@ struct JsonMessageItem {
 }
 
 #[derive(Debug)]
+enum RequestConnectionKind {
+    /// Connection has been requested from a caller not interested in waiting for the outcome.
+    Background,
+    /// Connection has been requested from a caller interested in waiting for the outcome.
+    WaitForResult { deadline: Instant },
+}
+
+impl RequestConnectionKind {
+    #[inline]
+    fn is_background(&self) -> bool {
+        matches!(self, Self::Background)
+    }
+}
+
+#[derive(Debug)]
+struct ConnectionAttempt {
+    kind: RequestConnectionKind,
+    result: OnceLock<ConnectionResult>,
+    result_ready: Notify,
+}
+
+impl ConnectionAttempt {
+    #[inline]
+    fn new(kind: RequestConnectionKind) -> Self {
+        Self {
+            kind,
+            result: OnceLock::new(),
+            result_ready: Notify::new(),
+        }
+    }
+
+    #[inline]
+    fn is_current(&self, current: &Option<Arc<Self>>) -> bool {
+        match current {
+            Some(current) => ptr::eq(self, current.as_ref()),
+            None => false,
+        }
+    }
+
+    fn finish(&self, result: Result<(), Error>) {
+        if self.result.get().is_some() {
+            return;
+        }
+
+        if self.result.set(result.map_err(Arc::new)).is_ok() {
+            self.result_ready.notify_waiters();
+        }
+    }
+
+    async fn wait_for_result(&self) -> ConnectionResult {
+        loop {
+            // Register before checking the result so completion cannot be missed.
+            let ready: Notified<'_> = self.result_ready.notified();
+
+            if let Some(result) = self.result.get() {
+                return result.clone();
+            }
+
+            ready.await;
+        }
+    }
+}
+
+// Status and attempt identity change together. Never retain this lock across an await.
+#[derive(Debug)]
+struct ConnectionState {
+    status: RelayStatus,
+    attempt: Option<Arc<ConnectionAttempt>>,
+}
+
+impl Default for ConnectionState {
+    fn default() -> Self {
+        Self {
+            status: RelayStatus::Initialized,
+            attempt: None,
+        }
+    }
+}
+
+#[derive(Debug)]
 struct RelayChannels {
     nostr: (Sender<JsonMessageItem>, Mutex<Receiver<JsonMessageItem>>),
+    connection_changed: Notify,
     ping: Notify,
-    terminate: Notify,
 }
 
 impl RelayChannels {
@@ -79,8 +162,8 @@ impl RelayChannels {
 
         Self {
             nostr: (tx_nostr, Mutex::new(rx_nostr)),
+            connection_changed: Notify::new(),
             ping: Notify::new(),
-            terminate: Notify::new(),
         }
     }
 
@@ -101,16 +184,12 @@ impl RelayChannels {
     pub fn ping(&self) {
         self.ping.notify_one()
     }
-
-    pub fn terminate(&self) {
-        self.terminate.notify_one()
-    }
 }
 
 #[derive(Debug)]
 struct SubscriptionData {
     pub filters: Vec<Filter>,
-    pub subscribed_at: Timestamp,
+    pub subscribed_connection: usize,
     pub is_auto_closing: bool,
     /// Received EOSE msg
     pub received_eose: bool,
@@ -122,10 +201,10 @@ struct SubscriptionData {
 
 impl SubscriptionData {
     #[inline]
-    fn long_lived(filters: Vec<Filter>) -> Self {
+    fn long_lived(filters: Vec<Filter>, subscribed_connection: usize) -> Self {
         Self {
             filters,
-            subscribed_at: Timestamp::now(),
+            subscribed_connection,
             is_auto_closing: false,
             received_eose: false,
             received_events: AtomicUsize::new(0),
@@ -137,7 +216,7 @@ impl SubscriptionData {
     fn auto_closing(filters: Vec<Filter>) -> Self {
         Self {
             filters,
-            subscribed_at: Timestamp::zero(),
+            subscribed_connection: 0,
             is_auto_closing: true,
             received_eose: false,
             received_events: AtomicUsize::new(0),
@@ -150,10 +229,10 @@ impl SubscriptionData {
 // put all fields that require an `Arc` here.
 #[derive(Debug)]
 pub(super) struct AtomicPrivateData {
-    status: AtomicRelayStatus,
+    connection_state: NonPoisoningMutex<ConnectionState>,
+    connection_task_handle: OnceLock<JoinHandle<()>>,
     channels: RelayChannels,
     subscriptions: RwLock<HashMap<SubscriptionId, SubscriptionData>>,
-    running: AtomicBool,
 }
 
 #[derive(Debug, Clone)]
@@ -181,10 +260,10 @@ impl InnerRelay {
         Self {
             url,
             atomic: Arc::new(AtomicPrivateData {
-                status: AtomicRelayStatus::default(),
+                connection_state: NonPoisoningMutex::new(ConnectionState::default()),
+                connection_task_handle: OnceLock::new(),
                 channels: RelayChannels::new(),
                 subscriptions: RwLock::new(HashMap::new()),
-                running: AtomicBool::new(false),
             }),
             capabilities: Arc::new(AtomicRelayCapabilities::new(capabilities)),
             opts,
@@ -207,39 +286,44 @@ impl InnerRelay {
         None
     }
 
-    /// Check if the connection task is running
-    #[inline]
+    #[cfg(test)]
     pub(super) fn is_running(&self) -> bool {
-        self.atomic.running.load(Ordering::SeqCst)
+        match self.atomic.connection_task_handle.get() {
+            Some(handle) => !handle.is_finished(),
+            None => false,
+        }
     }
 
     #[inline]
-    pub fn status(&self) -> RelayStatus {
-        self.atomic.status.load()
+    fn connection_state(&self) -> NonPoisoningMutexGuard<'_, ConnectionState> {
+        self.atomic.connection_state.lock()
     }
 
-    pub(super) fn set_status(&self, status: RelayStatus, log: bool) {
-        // Change status
-        self.atomic.status.set(status);
+    #[inline]
+    pub(super) fn status(&self) -> RelayStatus {
+        let state = self.connection_state();
+        state.status
+    }
 
-        // Log
-        if log {
-            match status {
-                RelayStatus::Initialized => tracing::trace!(url = %self.url, "Relay initialized."),
-                RelayStatus::Pending => tracing::trace!(url = %self.url, "Relay is pending."),
-                RelayStatus::Connecting => tracing::debug!("Connecting to '{}'", self.url),
-                RelayStatus::Connected => tracing::info!("Connected to '{}'", self.url),
-                RelayStatus::Disconnected => tracing::info!("Disconnected from '{}'", self.url),
-                RelayStatus::Terminated => {
-                    tracing::info!("Completely disconnected from '{}'", self.url)
-                }
-                RelayStatus::Banned => tracing::info!(url = %self.url, "Relay banned."),
-                RelayStatus::Sleeping => tracing::info!("Relay '{}' went to sleep.", self.url),
-                RelayStatus::Shutdown => tracing::info!("Relay '{}' has been shutdown.", self.url),
-            }
+    fn set_status(&self, state: &mut ConnectionState, status: RelayStatus) {
+        if state.status == status {
+            return;
         }
 
-        // Send notification
+        state.status = status;
+
+        match status {
+            RelayStatus::Initialized => tracing::trace!(url = %self.url, "Relay initialized."),
+            RelayStatus::Connecting => tracing::debug!("Connecting to '{}'", self.url),
+            RelayStatus::Connected => tracing::info!("Connected to '{}'", self.url),
+            RelayStatus::Disconnected => tracing::info!("Disconnected from '{}'", self.url),
+            RelayStatus::Idle => tracing::info!(url = %self.url, "Relay idle."),
+            RelayStatus::Banned => tracing::info!(url = %self.url, "Relay banned."),
+            RelayStatus::Sleeping => tracing::info!("Relay '{}' went to sleep.", self.url),
+            RelayStatus::Shutdown => tracing::info!("Relay '{}' has been shutdown.", self.url),
+        }
+
+        // Publish under the same lock so notifications follow the order of transitions.
         self.send_notification(RelayNotification::RelayStatus { status }, false);
 
         // If monitor is enabled, notify status change.
@@ -346,7 +430,10 @@ impl InnerRelay {
             return Err(Error::invalid_msg("subscription ID already exists"));
         }
 
-        subscriptions.insert(id, SubscriptionData::long_lived(filters));
+        subscriptions.insert(
+            id,
+            SubscriptionData::long_lived(filters, self.stats.success()),
+        );
 
         Ok(())
     }
@@ -372,7 +459,7 @@ impl InnerRelay {
         &self,
         id: &SubscriptionId,
         filters: Vec<Filter>,
-        update_subscribed_at: bool,
+        mark_subscribed: bool,
     ) -> Result<(), Error> {
         let mut subscriptions = self.atomic.subscriptions.write().await;
         let data = subscriptions
@@ -380,8 +467,8 @@ impl InnerRelay {
             .ok_or_else(|| Error::not_found("subscription not found"))?;
         data.filters = filters;
 
-        if update_subscribed_at {
-            data.subscribed_at = Timestamp::now();
+        if mark_subscribed {
+            data.subscribed_connection = self.stats.success();
             data.closed = false;
         }
 
@@ -424,20 +511,20 @@ impl InnerRelay {
         let subscriptions = self.atomic.subscriptions.read().await;
         match subscriptions.get(id) {
             Some(SubscriptionData {
-                subscribed_at,
+                subscribed_connection,
                 closed,
                 is_auto_closing: false,
                 ..
             }) => {
-                // Never subscribed -> SHOULD subscribe
-                // Subscription closed by relay -> SHOULD subscribe
-                if subscribed_at.is_zero() || *closed {
+                if *closed {
                     return true;
                 }
 
-                // First connection and subscribed_at != 0 -> SHOULD NOT re-subscribe
-                // Many connections and subscription NOT done in current websocket session -> SHOULD re-subscribe
-                self.stats.connected_at() > *subscribed_at && self.stats.success() > 1
+                // The successful connection count identifies the WebSocket session.
+                // Requests queued before the first connection are already in the outbound
+                // channel. Later sessions must restore subscriptions even within one second.
+                let current_connection: usize = self.stats.success();
+                current_connection > 1 && current_connection > *subscribed_connection
             }
             // NOT subscribe if auto-closing subscription or subscription not found
             Some(SubscriptionData {
@@ -493,7 +580,8 @@ impl InnerRelay {
         }
     }
 
-    pub(super) async fn check_connection_policy(&self) -> Result<AdmitStatus, Error> {
+    #[inline]
+    async fn check_connection_policy(&self) -> Result<AdmitStatus, Error> {
         match &self.state.admit_policy {
             Some(policy) => Ok(policy.admit_connection(&self.url).await?),
             None => Ok(AdmitStatus::Success),
@@ -553,126 +641,119 @@ impl InnerRelay {
 
         tracing::debug!(url = %self.url, "Waking up sleeping relay.");
 
-        // Update status to pending
-        // TODO: is this needed here?
-        self.set_status(RelayStatus::Pending, false);
+        self.request_connect();
 
-        // Spawn a new connection task
-        self.spawn_connection_task(None);
-
-        // Update the wake-up timestamp
         self.stats.just_woke_up();
     }
 
-    pub(super) fn spawn_connection_task(&self, stream: Option<(WebSocketSink, WebSocketStream)>) {
-        // Check if the connection task is already running
-        // This is checked also later, but it's checked also here to avoid a full-clone if we know that is already running.
-        if self.is_running() {
-            tracing::warn!(url = %self.url, "Connection task is already running.");
-            return;
+    #[inline]
+    pub(super) fn request_connect(&self) {
+        if let Err(error) = self.request_connection(RequestConnectionKind::Background) {
+            tracing::debug!(url = %self.url, %error, "Connection request ignored.");
         }
-
-        // Full-clone
-        let relay: InnerRelay = self.clone();
-
-        // Spawn task
-        task::spawn(relay.connection_task(stream));
     }
 
-    /// This **MUST** be called only by the [`InnerRelay::spawn_connection_task`] method!
-    async fn connection_task(self, mut stream: Option<(WebSocketSink, WebSocketStream)>) {
-        // Set the connection task as running and get the previous value.
-        let is_running: bool = self.atomic.running.swap(true, Ordering::SeqCst);
+    pub(super) async fn try_connect(&self, timeout: Duration) -> Result<(), Error> {
+        let kind = RequestConnectionKind::WaitForResult {
+            deadline: Instant::now() + timeout,
+        };
 
-        // Re-check if the connection task is already running.
-        // This is required because may happen that two tasks are spawned at the exact same moment.
-        // Not use the "assert" macro since will cause the task to panic.
-        if is_running {
-            tracing::warn!(url = %self.url, "Connection task is already running.");
-            return;
+        let Some(attempt) = self.request_connection(kind)? else {
+            return Ok(());
+        };
+
+        match time::timeout(Some(timeout), attempt.wait_for_result()).await {
+            Some(result) => result.map_err(|error| Error::new(error.kind(), error)),
+            None => Err(Error::timeout()),
+        }
+    }
+
+    fn request_connection(
+        &self,
+        kind: RequestConnectionKind,
+    ) -> Result<Option<Arc<ConnectionAttempt>>, Error> {
+        let attempt: Arc<ConnectionAttempt> = {
+            let mut state: NonPoisoningMutexGuard<'_, ConnectionState> = self.connection_state();
+
+            if state.status.is_banned() {
+                return Err(Error::banned());
+            }
+
+            if state.status.is_shutdown() {
+                return Err(Error::shutdown());
+            }
+
+            if state.status.is_connected() {
+                return Ok(None);
+            }
+
+            match &state.attempt {
+                // We already have an attempt in progress
+                Some(attempt) => Arc::clone(attempt),
+                // No attempt in progress, create a new one
+                None => {
+                    let attempt: Arc<ConnectionAttempt> = Arc::new(ConnectionAttempt::new(kind));
+
+                    state.attempt = Some(Arc::clone(&attempt));
+
+                    self.set_status(&mut state, RelayStatus::Connecting);
+
+                    self.atomic.channels.connection_changed.notify_one();
+
+                    attempt
+                }
+            }
+        };
+
+        let handle: &JoinHandle<()> = self.atomic.connection_task_handle.get_or_init(|| {
+            let relay: InnerRelay = self.clone();
+            task::spawn(relay.connection_task())
+        });
+
+        // Ban or shutdown may run before get_or_init publishes the task handle.
+        let status: RelayStatus = self.status();
+        if status.is_terminal() {
+            handle.abort();
         }
 
-        // Lock receiver
-        let mut rx_nostr = self.atomic.channels.rx_nostr().await;
+        Ok(Some(attempt))
+    }
 
-        // Last websocket error
-        // Store it to avoid printing every time the same connection error
-        let mut last_ws_error = None;
-
-        // Auto-connect loop
+    async fn next_connection(&self) -> Option<(Arc<ConnectionAttempt>, RelayStatus)> {
         loop {
-            // Check if the connection is allowed
-            match self.check_connection_policy().await {
-                Ok(status) => {
-                    // Connection rejected, update status and break the loop.
-                    if let AdmitStatus::Rejected { reason } = status {
-                        if let Some(reason) = reason {
-                            tracing::warn!(reason = %reason, "Connection rejected by admission policy.");
-                        }
+            // Only the connection task waits here; the request itself remains in the state.
+            let changed: Notified<'_> = self.atomic.channels.connection_changed.notified();
 
-                        // Set the status to "terminated" and break loop.
-                        self.set_status(RelayStatus::Terminated, false);
-                        break;
-                    }
-                }
-                Err(e) => tracing::error!(error = %e, "Impossible to check connection policy."),
-            }
-
-            // Connect and run message handler
-            // The termination requests are handled inside this method!
-            self.connect_and_run(stream.take(), &mut rx_nostr, &mut last_ws_error)
-                .await;
-
-            // Get status
-            let status: RelayStatus = self.status();
-
-            // If the relay is terminated, banned or sleeping, break the loop.
-            if status.is_terminated()
-                || status.is_banned()
-                || status.is_sleeping()
-                || status.is_shutdown()
             {
-                break;
-            }
+                let state: NonPoisoningMutexGuard<'_, ConnectionState> = self.connection_state();
 
-            // Check if reconnection is enabled
-            if self.opts.reconnect {
-                // Check if the relay is marked as disconnected. If not, update status.
-                // Check if disconnected to avoid a possible double log
-                if !status.is_disconnected() {
-                    self.set_status(RelayStatus::Disconnected, true);
+                if state.status.is_terminal() {
+                    return None;
                 }
 
-                // Sleep before retry to connect
-                let interval: Duration = self.calculate_retry_interval();
-                tracing::debug!(
-                    "Reconnecting to '{}' relay in {} secs",
-                    self.url,
-                    interval.as_secs()
-                );
-
-                // Sleep before retry to connect
-                // Handle termination to allow exiting immediately if request is received during the sleep.
-                tokio::select! {
-                    // Sleep
-                    _ = time::sleep(interval) => {},
-                    // Handle termination notification
-                    _ = self.handle_terminate() => break,
+                if let Some(attempt) = &state.attempt {
+                    return Some((Arc::clone(attempt), state.status));
                 }
-            } else {
-                // Reconnection disabled, set status to "terminated"
-                self.set_status(RelayStatus::Terminated, true);
-
-                // Break loop and exit
-                tracing::debug!(url = %self.url, "Reconnection disabled, breaking loop.");
-                break;
             }
+
+            changed.await;
         }
+    }
 
-        // Mark the connection task as stopped.
-        self.atomic.running.store(false, Ordering::SeqCst);
+    async fn connection_changed(&self, attempt: &ConnectionAttempt) {
+        loop {
+            let changed: Notified<'_> = self.atomic.channels.connection_changed.notified();
 
-        tracing::debug!(url = %self.url, "Auto connect loop terminated.");
+            {
+                let state = self.connection_state();
+                if !attempt.is_current(&state.attempt) {
+                    return;
+                }
+            }
+
+            // Notifications only wake the task. Recheck identity after stale or coalesced wakes.
+            changed.await;
+        }
     }
 
     /// Depending on attempts and success, use default or incremental retry interval
@@ -714,105 +795,186 @@ impl InnerRelay {
         self.opts.retry_interval
     }
 
-    #[inline]
-    async fn handle_terminate(&self) {
-        // Wait to be notified
-        self.atomic.channels.terminate.notified().await;
-    }
+    async fn connection_task(self) {
+        let mut rx_nostr: MutexGuard<'_, Receiver<JsonMessageItem>> =
+            self.atomic.channels.rx_nostr().await;
+        let mut last_ws_error: Option<String> = None;
 
-    pub(super) async fn _try_connect(
-        &self,
-        timeout: Duration,
-        status_on_failure: RelayStatus,
-    ) -> Result<(WebSocketSink, WebSocketStream), Error> {
-        // Update status
-        self.set_status(RelayStatus::Connecting, true);
+        while let Some((attempt, status)) = self.next_connection().await {
+            if status.is_disconnected() {
+                let interval: Duration = self.calculate_retry_interval();
 
-        // Increase the attempts
-        self.stats.new_attempt();
+                tracing::debug!(url = %self.url, ?interval, "Waiting before reconnect.");
 
-        // Connect futures
-        let connect_fut = self
-            .state
-            .transport
-            .connect((&self.url).into(), self.proxy());
-        let fut = time::timeout(Some(timeout), connect_fut);
-
-        // Try to connect
-        // If during connection the termination request is received, abort the connection and return error.
-        // At this stem is NOT required to close the WebSocket connection.
-        tokio::select! {
-            // Connect
-            res = fut => match res {
-                Some(Ok((ws_tx, ws_rx))) => {
-                    // Update status
-                    self.set_status(RelayStatus::Connected, true);
-
-                    // Increment success stats
-                    self.stats.new_success();
-
-                    Ok((ws_tx, ws_rx))
+                tokio::select! {
+                    biased;
+                    _ = self.connection_changed(&attempt) => continue,
+                    _ = time::sleep(interval) => {},
                 }
-                Some(Err(e)) => {
-                    // Update status
-                    self.set_status(status_on_failure, false);
+            }
 
-                    // Return error
-                    Err(Error::transport(e))
-                }
-                None => {
-                    // Update status
-                    self.set_status(status_on_failure, false);
-
-                    // Return error
-                    Err(Error::timeout())
-                }
-            },
-            // Handle termination notification
-            _ = self.handle_terminate() => Err(Error::rejected_msg("received termination request")),
+            self.connect_and_run(&attempt, &mut rx_nostr, &mut last_ws_error)
+                .await;
         }
     }
 
-    /// Connect and run message handler
-    ///
-    /// If `stream` arg is passed, no connection attempt will be done.
+    fn begin_connection(&self, attempt: &ConnectionAttempt) -> bool {
+        let mut state: NonPoisoningMutexGuard<'_, ConnectionState> = self.connection_state();
+
+        if !attempt.is_current(&state.attempt) {
+            return false;
+        }
+
+        self.set_status(&mut state, RelayStatus::Connecting);
+
+        true
+    }
+
+    fn begin_dial(&self, attempt: &ConnectionAttempt) -> bool {
+        let state: NonPoisoningMutexGuard<'_, ConnectionState> = self.connection_state();
+
+        if !attempt.is_current(&state.attempt) {
+            return false;
+        }
+
+        self.stats.new_attempt();
+
+        true
+    }
+
+    async fn dial_connection(
+        &self,
+        attempt: &ConnectionAttempt,
+    ) -> Result<(WebSocketSink, WebSocketStream), Error> {
+        let timeout: Duration = match attempt.kind {
+            RequestConnectionKind::Background => self.opts.connect_timeout,
+            RequestConnectionKind::WaitForResult { deadline } => deadline - Instant::now(),
+        };
+
+        if timeout.is_zero() {
+            return Err(Error::timeout());
+        }
+
+        time::timeout(Some(timeout), async {
+            if let AdmitStatus::Rejected { reason } = self.check_connection_policy().await? {
+                return Err(Error::connection_rejected(reason));
+            }
+
+            if !self.begin_dial(attempt) {
+                return Err(Error::state_msg("connection attempt superseded"));
+            }
+
+            self.state
+                .transport
+                .connect((&self.url).into(), self.proxy())
+                .await
+                .map_err(Error::transport)
+        })
+        .await
+        .unwrap_or_else(|| Err(Error::timeout()))
+    }
+
+    fn accept_connection(&self, attempt: &ConnectionAttempt) -> bool {
+        let mut state: NonPoisoningMutexGuard<'_, ConnectionState> = self.connection_state();
+
+        // A superseded dial must not publish Connected or count as a successful connection.
+        if !attempt.is_current(&state.attempt) {
+            return false;
+        }
+
+        self.stats.new_success();
+
+        self.set_status(&mut state, RelayStatus::Connected);
+
+        attempt.finish(Ok(()));
+
+        true
+    }
+
+    fn connection_failed(
+        &self,
+        attempt: &ConnectionAttempt,
+        error: Error,
+        last_ws_error: &mut Option<String>,
+    ) {
+        let mut state: NonPoisoningMutexGuard<'_, ConnectionState> = self.connection_state();
+
+        if !attempt.is_current(&state.attempt) {
+            return;
+        }
+
+        let message: String = error.to_string();
+        if last_ws_error.as_ref() != Some(&message) {
+            tracing::error!(url = %self.url, %error, "Connection failed.");
+            *last_ws_error = Some(message);
+        }
+
+        let stop: bool = !attempt.kind.is_background()
+            || error.kind() == ErrorKind::Rejected
+            || !self.opts.reconnect;
+
+        attempt.finish(Err(error));
+
+        if stop {
+            state.attempt = None;
+            self.set_status(&mut state, RelayStatus::Idle);
+            return;
+        }
+
+        state.attempt = Some(Arc::new(ConnectionAttempt::new(
+            RequestConnectionKind::Background,
+        )));
+
+        self.set_status(&mut state, RelayStatus::Disconnected);
+    }
+
+    fn schedule_reconnect(&self, attempt: &ConnectionAttempt) {
+        let mut state: NonPoisoningMutexGuard<'_, ConnectionState> = self.connection_state();
+
+        // A new request may already be waiting while the previous WebSocket closes.
+        if !attempt.is_current(&state.attempt) {
+            return;
+        }
+
+        if !self.opts.reconnect {
+            state.attempt = None;
+            self.set_status(&mut state, RelayStatus::Idle);
+            return;
+        }
+
+        state.attempt = Some(Arc::new(ConnectionAttempt::new(
+            RequestConnectionKind::Background,
+        )));
+
+        self.set_status(&mut state, RelayStatus::Disconnected);
+    }
+
     async fn connect_and_run(
         &self,
-        stream: Option<(WebSocketSink, WebSocketStream)>,
+        attempt: &ConnectionAttempt,
         rx_nostr: &mut MutexGuard<'_, Receiver<JsonMessageItem>>,
         last_ws_error: &mut Option<String>,
     ) {
-        match stream {
-            // Already have a stream, go to post-connection stage
-            Some((ws_tx, ws_rx)) => self.post_connection(ws_tx, ws_rx, rx_nostr).await,
-            // No stream is passed, try to connect
-            // Set the status to "disconnected" to allow to automatic retries
-            None => match self
-                ._try_connect(self.opts.connect_timeout, RelayStatus::Disconnected)
-                .await
-            {
-                // Connection success, go to post-connection stage
-                Ok((ws_tx, ws_rx)) => self.post_connection(ws_tx, ws_rx, rx_nostr).await,
-                // Error during connection
-                Err(e) => {
-                    // TODO: avoid string allocation. The error is converted to string only to perform the `!=` binary operation.
-                    // Check if error should be logged
-                    let e: String = e.to_string();
-                    let to_log: bool = match &last_ws_error {
-                        Some(prev_err) => {
-                            // Log only if different from the last one
-                            prev_err != &e
-                        }
-                        None => true,
-                    };
+        if !self.begin_connection(attempt) {
+            return;
+        }
 
-                    // Log error and update the last error
-                    if to_log {
-                        tracing::error!(url = %self.url, error= %e, "Connection failed.");
-                        *last_ws_error = Some(e);
-                    }
+        let connection: Result<(WebSocketSink, WebSocketStream), Error> = tokio::select! {
+            biased;
+            _ = self.connection_changed(attempt) => return,
+            result = self.dial_connection(attempt) => result,
+        };
+
+        match connection {
+            Ok((ws_tx, ws_rx)) => {
+                if !self.accept_connection(attempt) {
+                    return;
                 }
-            },
+
+                self.post_connection(ws_tx, ws_rx, rx_nostr, attempt).await;
+                self.schedule_reconnect(attempt);
+            }
+            Err(error) => self.connection_failed(attempt, error, last_ws_error),
         }
     }
 
@@ -823,12 +985,23 @@ impl InnerRelay {
         mut ws_tx: WebSocketSink,
         ws_rx: WebSocketStream,
         rx_nostr: &mut MutexGuard<'_, Receiver<JsonMessageItem>>,
+        attempt: &ConnectionAttempt,
     ) {
-        // (Re)subscribe to relay
-        if self.capabilities.can_read() {
-            if let Err(e) = self.resubscribe().await {
-                tracing::error!(url = %self.url, error = %e, "Impossible to subscribe.")
+        let resubscribe = async {
+            if self.capabilities.can_read() {
+                if let Err(error) = self.resubscribe().await {
+                    tracing::error!(url = %self.url, %error, "Impossible to subscribe.");
+                }
             }
+        };
+
+        tokio::select! {
+            biased;
+            _ = self.connection_changed(attempt) => {
+                let _ = close_ws(&mut ws_tx).await;
+                return;
+            },
+            _ = resubscribe => {},
         }
 
         let ping: PingTracker = PingTracker::default();
@@ -855,9 +1028,9 @@ impl InnerRelay {
                 Err(e) => tracing::error!(url = %self.url, error = %e, "Relay ingester exited with error.")
             },
             // Monitor when the relay can go to sleep
-            _ = self.sleep_when_idle_monitor() => {},
+            _ = self.sleep_when_idle_monitor(attempt) => {},
             // Termination handler
-            _ = self.handle_terminate() => {},
+            _ = self.connection_changed(attempt) => {},
             // Pinger
             _ = self.pinger() => {}
         }
@@ -1034,15 +1207,20 @@ impl InnerRelay {
     }
 
     /// Monitor if it's time to put the relay in sleep mode.
-    async fn sleep_when_idle_monitor(&self) {
+    async fn sleep_when_idle_monitor(&self, attempt: &ConnectionAttempt) {
         loop {
             // Sleep
             time::sleep(SLEEP_INTERVAL).await;
 
             // Check if should go to sleep
             if self.should_sleep().await {
-                // Update status
-                self.set_status(RelayStatus::Sleeping, true);
+                let mut state: NonPoisoningMutexGuard<'_, ConnectionState> =
+                    self.connection_state();
+
+                if attempt.is_current(&state.attempt) {
+                    state.attempt = None;
+                    self.set_status(&mut state, RelayStatus::Sleeping);
+                }
 
                 // Break the loop
                 break;
@@ -1335,49 +1513,52 @@ impl InnerRelay {
         }))
     }
 
-    pub fn disconnect(&self) {
-        let status = self.status();
-
-        // Check if it's already terminated, banned or shutdown
-        if status.is_terminated() || status.is_banned() || status.is_shutdown() {
-            return;
-        }
-
-        // Notify termination
-        self.atomic.channels.terminate();
-
-        // Update status
-        self.set_status(RelayStatus::Terminated, true);
+    #[inline]
+    pub(super) fn disconnect(&self) {
+        self.stop_connection(RelayStatus::Idle);
     }
 
-    pub fn ban(&self) {
-        let status = self.status();
-
-        // Check if it's already terminated, banned or shutdown
-        if status.is_terminated() || status.is_banned() || status.is_shutdown() {
-            return;
-        }
-
-        // Notify termination
-        self.atomic.channels.terminate();
-
-        // Update status
-        self.set_status(RelayStatus::Banned, true);
+    #[inline]
+    pub(super) fn ban(&self) {
+        self.stop_connection(RelayStatus::Banned);
     }
 
+    #[inline]
     pub(super) fn shutdown(&self) {
-        let status = self.status();
+        self.stop_connection(RelayStatus::Shutdown);
+    }
 
-        // Check if it's already terminated, banned or shutdown
-        if status.is_terminated() || status.is_banned() || status.is_shutdown() {
-            return;
+    fn stop_connection(&self, status: RelayStatus) {
+        {
+            let mut state: NonPoisoningMutexGuard<'_, ConnectionState> = self.connection_state();
+
+            let previous: RelayStatus = state.status;
+
+            if previous.is_terminal() || previous == status {
+                return;
+            }
+
+            if let Some(attempt) = state.attempt.take() {
+                let error: Error = match status {
+                    RelayStatus::Banned => Error::banned(),
+                    RelayStatus::Shutdown => Error::shutdown(),
+                    _ => Error::rejected_msg("received termination request"),
+                };
+                attempt.finish(Err(error));
+            }
+
+            self.set_status(&mut state, status);
+
+            // Wake the connection task so it observes the invalidated attempt
+            // and stops any pending retry, dial, or active session.
+            self.atomic.channels.connection_changed.notify_one();
         }
 
-        // Notify termination
-        self.atomic.channels.terminate();
-
-        // Update status
-        self.set_status(RelayStatus::Shutdown, true);
+        if status.is_terminal() {
+            if let Some(handle) = self.atomic.connection_task_handle.get() {
+                handle.abort();
+            }
+        }
     }
 
     #[inline]
@@ -1490,7 +1671,7 @@ impl InnerRelay {
                             }
                         }
                     }
-                    RelayNotification::RelayStatus { status } if status.is_disconnected() => {
+                    RelayNotification::RelayStatus { status } if status.is_connection_closed() => {
                         return Err(Error::not_connected());
                     }
                     _ => (),
@@ -1758,7 +1939,7 @@ impl InnerRelay {
                             reason: Some(SubscriptionAutoClosedReason::AuthenticationFailed),
                         });
                     }
-                    RelayNotification::RelayStatus { status } if status.is_disconnected() => {
+                    RelayNotification::RelayStatus { status } if status.is_connection_closed() => {
                         return Some(HandleAutoClosing {
                             to_close: false, // No need to send CLOSE msg
                             reason: None,
@@ -1792,7 +1973,7 @@ impl InnerRelay {
                                 }
                             }
                             RelayNotification::RelayStatus { status }
-                                if status.is_disconnected() =>
+                                if status.is_connection_closed() =>
                             {
                                 return Ok(());
                             }
@@ -1879,8 +2060,9 @@ async fn close_ws(tx: &mut WebSocketSink) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
-    use std::error::Error as _;
-    use std::future::Future;
+    use std::error::Error as StdError;
+    use std::future::{Future, IntoFuture};
+    use std::io::{Error as IoError, ErrorKind as IoErrorKind};
     use std::pin::Pin;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1890,12 +2072,23 @@ mod tests {
     use nostr::key::Keys;
     use nostr::message::SubscriptionId;
     use nostr::types::RelayUrl;
+    use tokio::sync::broadcast::Receiver as BroadcastReceiver;
+    use tokio::task::JoinHandle as TokioJoinHandle;
 
     use super::*;
     use crate::authenticator::SignerAuthenticator;
-    use crate::error::ErrorKind;
+    use crate::error::{Error, ErrorKind};
+    use crate::future::BoxedFuture;
+    use crate::local_relay::MockRelay;
     use crate::policy::{AdmitPolicy, AdmitStatus};
     use crate::relay::{Relay, RelayOptions};
+    use crate::stream::NotificationStream;
+    use crate::test_utils::{
+        ControlledConnectionPolicy, ControlledRelay, DialReply, PolicyReply, TEST_TIMEOUT,
+        connection_gate_close, fake_connection, start_try_connect, wait_for_eose, wait_for_status,
+        wait_for_subscription_event, wait_until,
+    };
+    use crate::transport::websocket::{DefaultWebsocketTransport, WebSocketTransport};
 
     #[derive(Debug)]
     struct CountingAdmitPolicy(Arc<AtomicUsize>);
@@ -2362,6 +2555,717 @@ mod tests {
                 .and_then(|source| source.downcast_ref::<broadcast::error::RecvError>())
                 .is_some_and(|source| matches!(source, broadcast::error::RecvError::Closed))
         );
+    }
+
+    async fn wait_for_task_exit(inner: &InnerRelay) {
+        wait_until("connection task to exit", || !inner.is_running()).await;
+    }
+
+    enum ReconnectRequest {
+        Background,
+        WaitForResult,
+    }
+
+    async fn reconnect_while_closing(opts: RelayOptions, request: ReconnectRequest) {
+        let local: MockRelay = MockRelay::run().await.unwrap();
+        let url: RelayUrl = local.url().await;
+
+        let websocket: DefaultWebsocketTransport = DefaultWebsocketTransport;
+
+        let ControlledRelay {
+            relay,
+            mut transport,
+        } = ControlledRelay::with_opts(opts);
+
+        let initial: TokioJoinHandle<Result<(), Error>> = start_try_connect(&relay, TEST_TIMEOUT);
+        let reply: DialReply = transport.next_dial().await;
+
+        let connection = websocket.connect((&url).into(), None).await.unwrap();
+        let (connection, mut close_gate) = connection_gate_close(connection);
+
+        assert!(reply.send(Ok(connection)).is_ok());
+
+        initial.await.unwrap().unwrap();
+
+        let mut notifications: NotificationStream<RelayNotification> = relay.notifications();
+        let keys: Keys = Keys::generate();
+        let subscription: SubscriptionId = relay
+            .subscribe(Filter::new().author(keys.public_key()))
+            .await
+            .unwrap();
+        wait_for_eose(&mut notifications, &subscription).await;
+
+        relay.disconnect();
+
+        close_gate.wait_until_closing().await;
+
+        assert!(relay.inner.is_running());
+
+        // Submit the new request while the previous WebSocket is still closing.
+        let pending: Option<BoxedFuture<'_, Result<(), Error>>> = match request {
+            ReconnectRequest::WaitForResult => {
+                let mut pending: BoxedFuture<'_, Result<(), Error>> =
+                    Box::pin(relay.try_connect().timeout(TEST_TIMEOUT).into_future());
+                assert!(futures::poll!(pending.as_mut()).is_pending());
+                Some(pending)
+            }
+            ReconnectRequest::Background => {
+                relay.connect();
+                relay.connect();
+                None
+            }
+        };
+
+        assert_eq!(relay.status(), RelayStatus::Connecting);
+
+        transport.assert_no_pending_dials();
+
+        close_gate.release();
+
+        let reply: DialReply = transport.next_dial().await;
+        assert!(
+            reply
+                .send(websocket.connect((&url).into(), None).await)
+                .is_ok()
+        );
+        if let Some(pending) = pending {
+            pending.await.unwrap();
+        }
+        wait_for_eose(&mut notifications, &subscription).await;
+
+        let event: Event = EventBuilder::new(Kind::TextNote, "after reconnect")
+            .finalize(&keys)
+            .unwrap();
+        let event_id = event.id;
+        local.add_event(event).await.unwrap();
+        wait_for_subscription_event(&mut notifications, &subscription, &event_id).await;
+
+        assert_eq!(relay.stats().attempts(), 2);
+        assert_eq!(relay.stats().success(), 2);
+
+        transport.assert_no_pending_dials();
+    }
+
+    #[tokio::test]
+    async fn connection_result_wakes_all_callers_and_cannot_be_overwritten() {
+        let attempt: ConnectionAttempt = ConnectionAttempt::new(RequestConnectionKind::Background);
+
+        let mut first: BoxedFuture<'_, ConnectionResult> = Box::pin(attempt.wait_for_result());
+        let mut second: BoxedFuture<'_, ConnectionResult> = Box::pin(attempt.wait_for_result());
+
+        assert!(futures::poll!(first.as_mut()).is_pending());
+        assert!(futures::poll!(second.as_mut()).is_pending());
+
+        attempt.finish(Err(Error::state_msg("shared failure")));
+        attempt.finish(Ok(()));
+
+        let first: Arc<Error> = first.await.unwrap_err();
+        let second: Arc<Error> = second.await.unwrap_err();
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(first.to_string(), "shared failure");
+        assert!(Arc::ptr_eq(
+            &first,
+            &attempt.wait_for_result().await.unwrap_err()
+        ));
+    }
+
+    #[tokio::test]
+    async fn stale_connection_wakes_do_not_cancel_the_current_dial() {
+        let ControlledRelay {
+            relay,
+            mut transport,
+        } = ControlledRelay::new();
+
+        relay.connect();
+
+        let reply: DialReply = transport.next_dial().await;
+
+        for _ in 0..3 {
+            relay.inner.atomic.channels.connection_changed.notify_one();
+        }
+
+        assert!(reply.send(Ok(fake_connection())).is_ok());
+
+        wait_for_status(&relay, RelayStatus::Connected).await;
+
+        assert_eq!(relay.stats().attempts(), 1);
+        assert_eq!(relay.stats().success(), 1);
+
+        transport.assert_no_pending_dials();
+    }
+
+    #[tokio::test]
+    async fn wait_for_connection_waits_for_retry_but_returns_when_idle() {
+        let opts: RelayOptions = RelayOptions::default()
+            .adjust_retry_interval(false)
+            .retry_interval(Duration::from_secs(1));
+
+        let ControlledRelay {
+            relay,
+            mut transport,
+        } = ControlledRelay::with_opts(opts);
+
+        relay.connect();
+
+        assert!(
+            transport
+                .next_dial()
+                .await
+                .send(Err(Error::state_msg("retry")))
+                .is_ok()
+        );
+
+        wait_for_status(&relay, RelayStatus::Disconnected).await;
+
+        let mut waiting: BoxedFuture<'_, ()> = Box::pin(relay.wait_for_connection(TEST_TIMEOUT));
+
+        assert!(futures::poll!(waiting.as_mut()).is_pending());
+
+        relay.disconnect();
+
+        assert!(futures::poll!(waiting.as_mut()).is_ready());
+        assert_eq!(relay.status(), RelayStatus::Idle);
+        assert!(
+            futures::poll!(Box::pin(relay.wait_for_connection(TEST_TIMEOUT)).as_mut()).is_ready()
+        );
+    }
+
+    #[tokio::test]
+    async fn reconnect_request_survives_websocket_close() {
+        reconnect_while_closing(RelayOptions::default(), ReconnectRequest::Background).await;
+    }
+
+    #[tokio::test]
+    async fn explicit_reconnect_survives_close_without_automatic_reconnect() {
+        reconnect_while_closing(
+            RelayOptions::default().reconnect(false),
+            ReconnectRequest::Background,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn try_connect_waits_for_websocket_close() {
+        reconnect_while_closing(
+            RelayOptions::default().reconnect(false),
+            ReconnectRequest::WaitForResult,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn callers_join_connection_policy_and_share_its_error() {
+        let (policy, mut checks) = ControlledConnectionPolicy::new();
+
+        let ControlledRelay {
+            relay,
+            mut transport,
+        } = ControlledRelay::with_policy(policy);
+
+        let first: TokioJoinHandle<Result<(), Error>> = start_try_connect(&relay, TEST_TIMEOUT);
+
+        let reply: PolicyReply = checks.next_check().await;
+
+        assert_eq!(relay.status(), RelayStatus::Connecting);
+
+        let mut second: BoxedFuture<'_, Result<(), Error>> =
+            Box::pin(relay.try_connect().timeout(TEST_TIMEOUT).into_future());
+        assert!(futures::poll!(second.as_mut()).is_pending());
+
+        let error: Error = Error::policy(IoError::other("policy failure"));
+        reply.send(Err(error)).unwrap();
+
+        for result in [first.await.unwrap(), second.await] {
+            let error: Error = result.unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::Policy);
+            assert_eq!(error.to_string(), "policy failure");
+        }
+
+        assert_eq!(relay.status(), RelayStatus::Idle);
+        assert_eq!(relay.stats().attempts(), 0);
+
+        transport.assert_no_pending_dials();
+        checks.assert_no_pending_checks();
+    }
+
+    #[tokio::test]
+    async fn initial_try_connect_deadline_also_cancels_policy_check() {
+        let (policy, mut checks) = ControlledConnectionPolicy::new();
+
+        let ControlledRelay {
+            relay,
+            mut transport,
+        } = ControlledRelay::with_policy(policy);
+
+        let caller: TokioJoinHandle<Result<(), Error>> =
+            start_try_connect(&relay, Duration::from_millis(20));
+
+        let reply: PolicyReply = checks.next_check().await;
+
+        assert_eq!(
+            caller.await.unwrap().unwrap_err().kind(),
+            ErrorKind::Timeout
+        );
+
+        wait_for_status(&relay, RelayStatus::Idle).await;
+
+        assert!(reply.is_closed());
+        assert_eq!(relay.stats().attempts(), 0);
+        assert!(relay.inner.is_running());
+
+        transport.assert_no_pending_dials();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_try_connect_shares_transport_error_and_source() {
+        let ControlledRelay {
+            relay,
+            mut transport,
+        } = ControlledRelay::new();
+
+        let first: TokioJoinHandle<Result<(), Error>> = start_try_connect(&relay, TEST_TIMEOUT);
+        let reply: DialReply = transport.next_dial().await;
+
+        let mut second: BoxedFuture<'_, Result<(), Error>> =
+            Box::pin(relay.try_connect().timeout(TEST_TIMEOUT).into_future());
+        assert!(futures::poll!(second.as_mut()).is_pending());
+
+        let cause: IoError = IoError::new(IoErrorKind::ConnectionRefused, "refused");
+        let error: Error = Error::other(cause);
+        assert!(reply.send(Err(error)).is_ok());
+
+        for result in [first.await.unwrap(), second.await] {
+            let error: Error = result.unwrap_err();
+
+            assert_eq!(error.kind(), ErrorKind::Transport);
+            assert_eq!(error.to_string(), "refused");
+
+            let mut source: Option<&(dyn StdError + 'static)> = error.source();
+            while let Some(error) = source {
+                if let Some(error) = error.downcast_ref::<IoError>() {
+                    assert_eq!(error.kind(), IoErrorKind::ConnectionRefused);
+                    break;
+                }
+                source = error.source();
+            }
+
+            assert!(source.is_some(), "original transport source was lost");
+        }
+
+        assert_eq!(relay.status(), RelayStatus::Idle);
+        assert_eq!(relay.stats().attempts(), 1);
+        assert!(relay.inner.is_running());
+
+        transport.assert_no_pending_dials();
+    }
+
+    #[tokio::test]
+    async fn joining_caller_timeout_does_not_cancel_shared_dial() {
+        let ControlledRelay {
+            relay,
+            mut transport,
+        } = ControlledRelay::new();
+
+        let first: TokioJoinHandle<Result<(), Error>> = start_try_connect(&relay, TEST_TIMEOUT);
+        let reply: DialReply = transport.next_dial().await;
+
+        let error: Error = relay
+            .try_connect()
+            .timeout(Duration::from_millis(20))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::Timeout);
+        assert_eq!(relay.status(), RelayStatus::Connecting);
+        assert!(!reply.is_closed());
+
+        assert!(reply.send(Ok(fake_connection())).is_ok());
+        first.await.unwrap().unwrap();
+
+        assert_eq!(relay.status(), RelayStatus::Connected);
+        assert_eq!(relay.stats().attempts(), 1);
+    }
+
+    #[tokio::test]
+    async fn dropping_try_connect_only_stops_waiting() {
+        let ControlledRelay {
+            relay,
+            mut transport,
+        } = ControlledRelay::new();
+
+        let caller: TokioJoinHandle<Result<(), Error>> = start_try_connect(&relay, TEST_TIMEOUT);
+        let reply: DialReply = transport.next_dial().await;
+
+        caller.abort();
+
+        assert!(caller.await.unwrap_err().is_cancelled());
+        assert!(!reply.is_closed());
+
+        assert!(reply.send(Ok(fake_connection())).is_ok());
+
+        wait_for_status(&relay, RelayStatus::Connected).await;
+
+        assert_eq!(relay.stats().attempts(), 1);
+    }
+
+    #[tokio::test]
+    async fn initial_try_connect_timeout_leaves_task_idle_without_retries() {
+        let ControlledRelay {
+            relay,
+            mut transport,
+        } = ControlledRelay::new();
+
+        let caller: TokioJoinHandle<Result<(), Error>> =
+            start_try_connect(&relay, Duration::from_millis(20));
+        let reply: DialReply = transport.next_dial().await;
+
+        assert_eq!(
+            caller.await.unwrap().unwrap_err().kind(),
+            ErrorKind::Timeout
+        );
+
+        wait_for_status(&relay, RelayStatus::Idle).await;
+
+        assert!(reply.is_closed());
+        assert!(relay.inner.is_running());
+
+        transport.assert_no_pending_dials();
+
+        let handle: &JoinHandle<()> = relay.inner.atomic.connection_task_handle.get().unwrap();
+
+        let retry: TokioJoinHandle<Result<(), Error>> = start_try_connect(&relay, TEST_TIMEOUT);
+
+        assert!(
+            transport
+                .next_dial()
+                .await
+                .send(Ok(fake_connection()))
+                .is_ok()
+        );
+
+        retry.await.unwrap().unwrap();
+
+        assert_eq!(relay.stats().attempts(), 2);
+        assert!(ptr::eq(
+            handle,
+            relay.inner.atomic.connection_task_handle.get().unwrap()
+        ));
+    }
+
+    #[tokio::test]
+    async fn try_connect_timeout_includes_waiting_for_close() {
+        let ControlledRelay {
+            relay,
+            mut transport,
+        } = ControlledRelay::new();
+
+        let initial: TokioJoinHandle<Result<(), Error>> = start_try_connect(&relay, TEST_TIMEOUT);
+
+        let (connection, mut close_gate) = connection_gate_close(fake_connection());
+
+        assert!(transport.next_dial().await.send(Ok(connection)).is_ok());
+
+        initial.await.unwrap().unwrap();
+
+        relay.disconnect();
+
+        close_gate.wait_until_closing().await;
+
+        let error: Error = relay
+            .try_connect()
+            .timeout(Duration::from_millis(20))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::Timeout);
+
+        transport.assert_no_pending_dials();
+
+        close_gate.release();
+
+        wait_for_status(&relay, RelayStatus::Idle).await;
+
+        assert_eq!(relay.stats().attempts(), 1);
+    }
+
+    #[tokio::test]
+    async fn superseded_handshake_cannot_publish_connected() {
+        let ControlledRelay {
+            relay,
+            mut transport,
+        } = ControlledRelay::new();
+
+        let first: TokioJoinHandle<Result<(), Error>> = start_try_connect(&relay, TEST_TIMEOUT);
+        let reply: DialReply = transport.next_dial().await;
+
+        let mut updates: BroadcastReceiver<RelayNotification> =
+            relay.inner.internal_notification_sender.subscribe();
+
+        // Replace the attempt without yielding after completing its handshake,
+        // so the connection task cannot accept the superseded connection.
+        assert!(reply.send(Ok(fake_connection())).is_ok());
+
+        relay.disconnect();
+        relay.connect();
+        relay.disconnect();
+        relay.connect();
+
+        let second: DialReply = transport.next_dial().await;
+
+        assert_eq!(
+            first.await.unwrap().unwrap_err().kind(),
+            ErrorKind::Rejected
+        );
+        assert_eq!(relay.stats().success(), 0);
+
+        while let Ok(notification) = updates.try_recv() {
+            assert!(!matches!(
+                notification,
+                RelayNotification::RelayStatus {
+                    status: RelayStatus::Connected
+                }
+            ));
+        }
+
+        assert!(second.send(Ok(fake_connection())).is_ok());
+
+        wait_for_status(&relay, RelayStatus::Connected).await;
+
+        assert_eq!(relay.stats().attempts(), 2);
+        assert_eq!(relay.stats().success(), 1);
+
+        transport.assert_no_pending_dials();
+    }
+
+    #[tokio::test]
+    async fn try_connect_joins_next_scheduled_retry() {
+        let opts: RelayOptions = RelayOptions::default()
+            .adjust_retry_interval(false)
+            .retry_interval(Duration::from_secs(1));
+
+        let ControlledRelay {
+            relay,
+            mut transport,
+        } = ControlledRelay::with_opts(opts);
+
+        relay.connect();
+
+        assert!(
+            transport
+                .next_dial()
+                .await
+                .send(Err(Error::state_msg("first failure")))
+                .is_ok()
+        );
+
+        wait_for_status(&relay, RelayStatus::Disconnected).await;
+
+        let mut caller: BoxedFuture<'_, Result<(), Error>> =
+            Box::pin(relay.try_connect().timeout(TEST_TIMEOUT).into_future());
+
+        assert!(futures::poll!(caller.as_mut()).is_pending());
+        transport.assert_no_pending_dials();
+        assert!(
+            transport
+                .next_dial()
+                .await
+                .send(Ok(fake_connection()))
+                .is_ok()
+        );
+
+        caller.await.unwrap();
+
+        assert_eq!(relay.stats().attempts(), 2);
+    }
+
+    #[tokio::test]
+    async fn terminal_operations_cancel_pending_reconnects_and_stop_task() {
+        for terminal in [RelayStatus::Banned, RelayStatus::Shutdown] {
+            let ControlledRelay {
+                relay,
+                mut transport,
+            } = ControlledRelay::new();
+
+            let first: TokioJoinHandle<Result<(), Error>> = start_try_connect(&relay, TEST_TIMEOUT);
+            let (connection, mut close_gate) = connection_gate_close(fake_connection());
+
+            assert!(transport.next_dial().await.send(Ok(connection)).is_ok());
+
+            first.await.unwrap().unwrap();
+
+            relay.disconnect();
+            close_gate.wait_until_closing().await;
+
+            let mut pending: BoxedFuture<'_, Result<(), Error>> =
+                Box::pin(relay.try_connect().timeout(TEST_TIMEOUT).into_future());
+
+            assert!(futures::poll!(pending.as_mut()).is_pending());
+
+            match terminal {
+                RelayStatus::Banned => relay.ban(),
+                _ => relay.shutdown(),
+            }
+            let error: Error = pending.await.unwrap_err();
+
+            assert_eq!(error.kind(), ErrorKind::State);
+            assert_eq!(
+                error.to_string(),
+                match terminal {
+                    RelayStatus::Banned => "relay banned",
+                    _ => "shutdown",
+                }
+            );
+
+            wait_for_task_exit(&relay.inner).await;
+
+            assert!(close_gate.is_cancelled());
+
+            relay.connect();
+
+            assert_eq!(relay.status(), terminal);
+            assert!(relay.inner.connection_state().attempt.is_none());
+            assert_eq!(relay.stats().attempts(), 1);
+
+            transport.assert_no_pending_dials();
+        }
+    }
+
+    #[tokio::test]
+    async fn ban_and_shutdown_stop_idle_tasks() {
+        for terminal in [RelayStatus::Banned, RelayStatus::Shutdown] {
+            for idle in [RelayStatus::Idle, RelayStatus::Sleeping] {
+                let opts: RelayOptions =
+                    RelayOptions::default().sleep_when_idle(SleepWhenIdle::Enabled {
+                        timeout: Duration::ZERO,
+                    });
+
+                let ControlledRelay {
+                    relay,
+                    mut transport,
+                } = ControlledRelay::with_opts(opts);
+
+                let first: TokioJoinHandle<Result<(), Error>> =
+                    start_try_connect(&relay, TEST_TIMEOUT);
+
+                assert!(
+                    transport
+                        .next_dial()
+                        .await
+                        .send(Ok(fake_connection()))
+                        .is_ok()
+                );
+
+                first.await.unwrap().unwrap();
+
+                match idle {
+                    RelayStatus::Sleeping => wait_for_status(&relay, idle).await,
+                    _ => relay.disconnect(),
+                }
+
+                match terminal {
+                    RelayStatus::Banned => relay.ban(),
+                    _ => relay.shutdown(),
+                }
+
+                wait_for_task_exit(&relay.inner).await;
+
+                assert_eq!(relay.status(), terminal);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn last_drop_shuts_down_idle_connection_task() {
+        let ControlledRelay {
+            relay,
+            mut transport,
+        } = ControlledRelay::new();
+
+        let first: TokioJoinHandle<Result<(), Error>> = start_try_connect(&relay, TEST_TIMEOUT);
+
+        assert!(
+            transport
+                .next_dial()
+                .await
+                .send(Ok(fake_connection()))
+                .is_ok()
+        );
+
+        first.await.unwrap().unwrap();
+
+        relay.disconnect();
+
+        let inner: InnerRelay = relay.inner.clone();
+        let clone: Relay = relay.clone();
+
+        drop(relay);
+
+        assert_eq!(inner.status(), RelayStatus::Idle);
+        assert!(inner.is_running());
+
+        drop(clone);
+        wait_for_task_exit(&inner).await;
+
+        assert_eq!(inner.status(), RelayStatus::Shutdown);
+        assert_eq!(Arc::strong_count(&inner.atomic), 1);
+    }
+
+    #[tokio::test]
+    async fn disconnect_before_first_connect_does_not_cancel_new_attempt() {
+        let ControlledRelay {
+            relay,
+            mut transport,
+        } = ControlledRelay::with_opts(RelayOptions::default().reconnect(false));
+
+        relay.disconnect();
+        relay.connect();
+
+        assert!(
+            transport
+                .next_dial()
+                .await
+                .send(Ok(fake_connection()))
+                .is_ok()
+        );
+
+        wait_for_status(&relay, RelayStatus::Connected).await;
+
+        assert_eq!(relay.stats().attempts(), 1);
+        assert_eq!(relay.stats().success(), 1);
+    }
+
+    #[tokio::test]
+    async fn subscription_restoration_uses_connection_counter() {
+        let relay: Relay = Relay::new(RelayUrl::parse("wss://relay.example.com").unwrap());
+
+        let id: SubscriptionId = SubscriptionId::new("generation");
+        let filters: Vec<Filter> = vec![Filter::new().kind(Kind::TextNote)];
+        relay
+            .inner
+            .add_long_lived_subscription(id.clone(), filters.clone())
+            .await
+            .unwrap();
+
+        relay.inner.stats.new_success();
+
+        assert!(!relay.inner.should_resubscribe(&id).await);
+
+        relay.inner.stats.new_success();
+
+        assert!(relay.inner.should_resubscribe(&id).await);
+
+        relay
+            .inner
+            .update_subscription(&id, filters, true)
+            .await
+            .unwrap();
+
+        assert!(!relay.inner.should_resubscribe(&id).await);
+
+        relay.inner.stats.new_success();
+
+        assert!(relay.inner.should_resubscribe(&id).await);
     }
 }
 

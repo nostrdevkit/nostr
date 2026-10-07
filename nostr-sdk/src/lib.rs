@@ -13,6 +13,7 @@ mod future;
 #[cfg(any(feature = "local-relay", test))]
 pub mod local_relay;
 pub mod monitor;
+mod mutex;
 pub mod policy;
 mod pool;
 pub mod prelude;

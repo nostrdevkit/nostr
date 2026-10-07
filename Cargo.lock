@@ -115,7 +115,7 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 [[package]]
 name = "async-utility"
 version = "0.3.2"
-source = "git+https://github.com/yukibtc/async-utility?rev=7d3a79983d0e848aafed9d321637af7334e01349#7d3a79983d0e848aafed9d321637af7334e01349"
+source = "git+https://github.com/yukibtc/async-utility?rev=b323ae0c1c1424b78bf8bb8832b95e86771f1dee#b323ae0c1c1424b78bf8bb8832b95e86771f1dee"
 dependencies = [
  "futures-util",
  "gloo-timers",

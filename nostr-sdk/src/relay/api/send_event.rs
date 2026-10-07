@@ -206,7 +206,7 @@ async fn wait_for_authentication(
                 RelayNotification::AuthenticationFailed => {
                     return Err(Error::authentication_msg("authentication failed"));
                 }
-                RelayNotification::RelayStatus { status } if status.is_disconnected() => {
+                RelayNotification::RelayStatus { status } if status.is_connection_closed() => {
                     return Err(Error::not_connected());
                 }
                 _ => (),

@@ -569,7 +569,7 @@ pub(super) async fn sync(
                     last_relevant_msg = Instant::now();
                 }
             }
-            RelayNotification::RelayStatus { status } if status.is_disconnected() => {
+            RelayNotification::RelayStatus { status } if status.is_connection_closed() => {
                 return Err(Error::not_connected());
             }
             _ => (),

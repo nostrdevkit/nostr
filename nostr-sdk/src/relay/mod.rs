@@ -234,9 +234,9 @@ impl Relay {
     ///
     /// # Overview
     ///
-    /// If the relay’s status is not [`RelayStatus::Initialized`] or [`RelayStatus::Terminated`],
-    /// this method returns immediately without doing anything.
-    /// Otherwise, the connection task will be spawned, which will attempt to connect to relay.
+    /// Requests a connection when the relay is initialized, idle or sleeping.
+    /// The connection task is spawned once and retained until ban or shutdown.
+    /// Requests made while an old WebSocket is closing are retained.
     ///
     /// This method returns immediately and doesn't provide any information on if the connection was successful or not.
     ///
@@ -244,38 +244,26 @@ impl Relay {
     ///
     /// By default, in case of disconnection, the connection task will automatically attempt to reconnect.
     /// This behavior can be disabled by changing [`RelayOptions::reconnect`] option.
+    #[inline]
     pub fn connect(&self) {
-        // Immediately return if can't connect
-        if !self.status().can_connect() {
-            return;
-        }
-
-        // Update status
-        // Change it to pending to avoid issues with the health check (initialized check)
-        self.inner.set_status(RelayStatus::Pending, false);
-
-        // Spawn connection task
-        self.inner.spawn_connection_task(None);
+        self.inner.request_connect();
     }
 
     /// Waits for relay connection
     ///
     /// Wait for relay connection at most for the specified `timeout`.
-    /// The code continues when the relay is connected or the `timeout` is reached.
+    /// Returns when connected, when the relay becomes idle, sleeping, banned or shut down,
+    /// or when the timeout is reached.
     pub async fn wait_for_connection(&self, timeout: Duration) {
+        // Subscribe before reading status so a concurrent transition cannot be missed.
+        let mut notifications = self.inner.internal_notification_sender.subscribe();
+
         let status: RelayStatus = self.status();
 
-        // Immediately returns if the relay is already connected, if it's terminated or banned.
-        if status.is_connected()
-            || status.is_terminated()
-            || status.is_banned()
-            || status.is_shutdown()
-        {
+        // Immediately returns if the relay is already connected, if it's idle, banned or shut down.
+        if status.is_connected() || status.is_idle() || status.is_banned() || status.is_shutdown() {
             return;
         }
-
-        // Subscribe to notifications
-        let mut notifications = self.inner.internal_notification_sender.subscribe();
 
         // Set timeout
         time::timeout(Some(timeout), async {
@@ -285,12 +273,11 @@ impl Relay {
                     match status {
                         // Waiting for connection
                         RelayStatus::Initialized
-                        | RelayStatus::Pending
                         | RelayStatus::Connecting
                         | RelayStatus::Disconnected => {}
-                        // Connected or terminated/banned/sleeping/shutdown
+                        // Connected or idle/banned/sleeping/shutdown
                         RelayStatus::Connected
-                        | RelayStatus::Terminated
+                        | RelayStatus::Idle
                         | RelayStatus::Banned
                         | RelayStatus::Sleeping
                         | RelayStatus::Shutdown => break,
@@ -305,14 +292,18 @@ impl Relay {
     ///
     /// # Overview
     ///
-    /// If the relay’s status is not [`RelayStatus::Initialized`] or [`RelayStatus::Terminated`],
-    /// this method returns immediately without doing anything.
-    /// Otherwise, attempts to establish a connection without spawning the connection task if it fails.
-    /// This means that if the connection fails, no automatic retries are scheduled.
-    /// Use [`Relay::connect`] if you want to immediately spawn a connection task,
-    /// regardless of whether the initial connection succeeds.
+    /// Returns immediately if already connected. Otherwise, requests a connection
+    /// or waits for the current attempt (the next scheduled retry if disconnected).
+    /// Concurrent callers share that attempt, each with their own timeout.
     ///
-    /// Returns an error if the connection fails or if the relay has been banned.
+    /// A newly requested attempt that fails does not schedule automatic retries.
+    /// Use [`Relay::connect`] to enable retries after an initial failure.
+    ///
+    /// The timeout includes waiting for an old WebSocket to close and admission policy checks.
+    /// Dropping the future only stops waiting; the connection attempt continues within
+    /// its assigned timeout. A caller joining an existing attempt does not change its timeout.
+    ///
+    /// Returns an error on connection failure, timeout, disconnect, ban or shutdown.
     ///
     /// # Automatic reconnection
     ///
@@ -323,7 +314,9 @@ impl Relay {
         TryConnect::new(self)
     }
 
-    /// Disconnect from relay and set status to [`RelayStatus::Terminated`].
+    /// Disconnect from relay and set status to [`RelayStatus::Idle`].
+    ///
+    /// The persistent task closes the WebSocket and waits for another connection request.
     #[inline]
     pub fn disconnect(&self) {
         self.inner.disconnect()
@@ -418,13 +411,14 @@ mod tests {
     use std::pin::Pin;
     use std::sync::Arc;
 
-    use async_utility::time;
     use futures::StreamExt;
+    use tokio::time;
 
     use super::*;
     use crate::error::{Error, ErrorKind};
     use crate::local_relay::*;
     use crate::policy::{AdmitPolicy, AdmitStatus};
+    use crate::relay::constants::WEBSOCKET_TX_TIMEOUT;
     use crate::test_utils::setup_relay;
 
     #[derive(Debug)]
@@ -469,7 +463,7 @@ mod tests {
     fn check_relay_is_sleeping(relay: &Relay) {
         assert_eq!(relay.status(), RelayStatus::Sleeping);
         assert!(relay.status().can_connect());
-        assert!(!relay.inner.is_running());
+        assert!(relay.inner.is_running());
     }
 
     #[tokio::test]
@@ -490,9 +484,19 @@ mod tests {
 
         assert_eq!(relay.status(), RelayStatus::Connected);
 
+        // Complete a protocol exchange before shutting down the server.
+        relay.count_events(Filter::new()).await.unwrap();
+
         mock.shutdown();
 
-        time::sleep(Duration::from_millis(100)).await;
+        let timeout: Duration = WEBSOCKET_TX_TIMEOUT + Duration::from_secs(2);
+        time::timeout(timeout, async {
+            while relay.status() != RelayStatus::Disconnected {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
 
         assert_eq!(relay.status(), RelayStatus::Disconnected);
 
@@ -517,13 +521,22 @@ mod tests {
 
         assert_eq!(relay.status(), RelayStatus::Connected);
 
+        // Complete a protocol exchange before shutting down the server.
+        relay.count_events(Filter::new()).await.unwrap();
+
         mock.shutdown();
 
-        time::sleep(Duration::from_millis(100)).await;
+        let timeout: Duration = WEBSOCKET_TX_TIMEOUT + Duration::from_secs(2);
+        time::timeout(timeout, async {
+            while relay.status() != RelayStatus::Idle {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
 
-        assert_eq!(relay.status(), RelayStatus::Terminated);
-
-        assert!(!relay.inner.is_running());
+        assert_eq!(relay.status(), RelayStatus::Idle);
+        assert!(relay.inner.is_running());
     }
 
     #[tokio::test]
@@ -548,9 +561,8 @@ mod tests {
 
         time::sleep(Duration::from_millis(100)).await;
 
-        assert_eq!(relay.status(), RelayStatus::Terminated);
-
-        assert!(!relay.inner.is_running());
+        assert_eq!(relay.status(), RelayStatus::Idle);
+        assert!(relay.inner.is_running());
     }
 
     #[tokio::test]
@@ -578,9 +590,8 @@ mod tests {
 
         time::sleep(Duration::from_millis(100)).await;
 
-        assert_eq!(relay.status(), RelayStatus::Terminated);
-
-        assert!(!relay.inner.is_running());
+        assert_eq!(relay.status(), RelayStatus::Idle);
+        assert!(relay.inner.is_running());
     }
 
     #[tokio::test]
@@ -645,9 +656,8 @@ mod tests {
 
         time::sleep(Duration::from_millis(100)).await;
 
-        assert_eq!(relay.status(), RelayStatus::Terminated);
-
-        assert!(!relay.inner.is_running());
+        assert_eq!(relay.status(), RelayStatus::Idle);
+        assert!(relay.inner.is_running());
     }
 
     #[tokio::test]
@@ -674,9 +684,8 @@ mod tests {
 
         time::sleep(Duration::from_millis(100)).await;
 
-        assert_eq!(relay.status(), RelayStatus::Terminated);
-
-        assert!(!relay.inner.is_running());
+        assert_eq!(relay.status(), RelayStatus::Idle);
+        assert!(relay.inner.is_running());
     }
 
     #[tokio::test]
@@ -705,9 +714,8 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::Rejected);
         assert_eq!(err.to_string(), "received termination request");
 
-        assert_eq!(relay.status(), RelayStatus::Terminated);
-
-        assert!(!relay.inner.is_running());
+        assert_eq!(relay.status(), RelayStatus::Idle);
+        assert!(relay.inner.is_running());
     }
 
     #[tokio::test]
@@ -731,7 +739,13 @@ mod tests {
         relay.ban();
 
         assert_eq!(relay.status(), RelayStatus::Banned);
-        assert!(!relay.inner.is_running());
+        time::timeout(Duration::from_secs(2), async {
+            while relay.inner.is_running() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
 
         // Retry to connect
         let res = relay.try_connect().timeout(Duration::from_secs(2)).await;
@@ -897,8 +911,8 @@ mod tests {
 
         time::sleep(Duration::from_secs(2)).await;
 
-        assert_eq!(relay.status(), RelayStatus::Terminated);
-        assert!(!relay.inner.is_running());
+        assert_eq!(relay.status(), RelayStatus::Idle);
+        assert!(relay.inner.is_running());
 
         // Retry to connect
         let res = relay.try_connect().timeout(Duration::from_secs(2)).await;
@@ -906,8 +920,8 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::Rejected);
         assert_eq!(err.to_string(), "connection rejected: reason=banned");
 
-        assert_eq!(relay.status(), RelayStatus::Terminated);
-        assert!(!relay.inner.is_running());
+        assert_eq!(relay.status(), RelayStatus::Idle);
+        assert!(relay.inner.is_running());
     }
 
     #[tokio::test]
