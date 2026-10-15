@@ -27,6 +27,20 @@
 
 -->
 
+## Unreleased
+
+### Breaking changes
+
+- Remove `signer` module and `NostrConnectRemoteSigner`
+- Change `NostrConnect::new` to accept only URI and client keys
+- Move `NostrConnect::auth_url_handler` to `NostrConnectBuilder`
+- Remove `NostrConnect::status`
+
+### Added
+
+- Add `NostrConnectBuilder` and `NostrConnect::builder`
+- Add `NostrConnect::client`
+
 ## v0.45.2 - 2026/09/11
 
 ### Fixed

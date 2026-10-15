@@ -4,6 +4,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use nostr_connect::prelude::*;
@@ -34,10 +35,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app_keys = Keys::parse("nsec1j4c6269y9w0q2er2xjw8sv2ehyrtfxq3jwgdlxj6qfn8z4gjsq5qfvfk99")?;
     let timeout = Duration::from_secs(120);
 
-    let mut connect = NostrConnect::new(uri, app_keys, timeout, None)?;
-
-    // Set auth_url handler
-    connect.auth_url_handler(MyAuthUrlHandler);
+    let connect: NostrConnect = NostrConnect::builder(uri, app_keys)
+        .timeout(timeout)
+        .auth_url_handler(Arc::new(MyAuthUrlHandler))
+        .build()?;
 
     let receiver =
         PublicKey::parse("npub1acg6thl5psv62405rljzkj8spesceyfz2c32udakc2ak0dmvfeyse9p35c")?;
