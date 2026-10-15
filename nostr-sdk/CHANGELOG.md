@@ -47,6 +47,8 @@
 - Add `LocalRelayBuilderNip42::relay_url` to make it possible to configure a custom `relay_url` for the nip42 challenge validation (https://github.com/nostrdevkit/nostr/pull/1476)
 - Add `LocalRelayBuilder::new_event_channel_size` for customizing the size of the channel used to notify new received events
 - Add opt-in receiver gap reporting with `NotificationStream::with_gaps()`.
+- Add `Relay::subscription_received_eose` to check if the relay answered the current `REQ` of a subscription with `EOSE`.
+- Add `Relay::reissue_subscription` to queue `CLOSE` and `REQ` for a long-lived subscription as a single unit, so the relay sends its stored events again.
 
 ### Fixed
 
@@ -60,6 +62,7 @@
 - Restore subscriptions after reconnections within the same second  (https://github.com/nostrdevkit/nostr/pull/1491).
 - Reset subscription EOSE and event-limit tracking when a subscription is restored, so a relay isn't flagged for resending stored events.
 - Avoid duplicate subscription `REQ`s after reconnecting.
+- Reset subscription EOSE and event-limit tracking when a `REQ` is sent again on the same connection.
 
 ### Deprecated
 

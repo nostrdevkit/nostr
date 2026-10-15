@@ -21,7 +21,7 @@ use rand::RngExt;
 use rand::rand_core::UnwrapErr;
 use rand::rngs::SysRng;
 use tokio::sync::futures::Notified;
-use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::sync::mpsc::{self, PermitIterator, Receiver, Sender};
 use tokio::sync::{Mutex, MutexGuard, Notify, RwLock, RwLockWriteGuard, broadcast, oneshot, watch};
 use universal_time::Instant;
 
@@ -222,6 +222,21 @@ impl RelayChannels {
             .0
             .try_send(msg)
             .map_err(|_| Error::state_msg("can't send message to the transport dispatcher"))
+    }
+
+    /// Queue the messages in order, or none of them if the channel can't fit them all.
+    fn send_client_msgs<const N: usize>(&self, msgs: [JsonMessageItem; N]) -> Result<(), Error> {
+        let permits: PermitIterator<'_, JsonMessageItem> = self
+            .nostr
+            .0
+            .try_reserve_many(N)
+            .map_err(|_| Error::state_msg("can't send message to the transport dispatcher"))?;
+
+        for (permit, msg) in permits.zip(msgs) {
+            permit.send(msg);
+        }
+
+        Ok(())
     }
 
     #[inline]
@@ -480,6 +495,11 @@ impl InnerRelay {
         subscription.get(id).map(|d| d.filters.clone())
     }
 
+    pub(super) async fn subscription_received_eose(&self, id: &SubscriptionId) -> Option<bool> {
+        let subscriptions = self.atomic.subscriptions.read().await;
+        subscriptions.get(id).map(|data| data.received_eose)
+    }
+
     pub(super) async fn remove_subscription(&self, id: &SubscriptionId) {
         let mut subscriptions = self.atomic.subscriptions.write().await;
         subscriptions.remove(id);
@@ -627,15 +647,18 @@ impl InnerRelay {
             return;
         }
 
-        // A queued REQ may have survived an earlier session without being dispatched.
-        let connection: usize = self.stats.success();
+        // Every REQ starts a new stored-events query, also when sent again on the same
+        // connection. Frames the relay sent for the previous REQ before handling the
+        // CLOSE may still arrive after this reset:
+        // - its EOSE sets the flag early, which is acceptable because the filters are
+        //   the same, so that EOSE covers the same stored events;
+        // - its events count toward the limit of the new REQ.
+        data.received_eose = false;
+        *data.received_events.get_mut() = 0;
 
-        if connection > data.subscribed_connection {
-            data.received_eose = false;
-            *data.received_events.get_mut() = 0;
-        }
-
-        data.subscribed_connection = connection;
+        // Record the session that sends the REQ, since a queued REQ may have survived
+        // an earlier session without being dispatched.
+        data.subscribed_connection = self.stats.success();
         data.closed = false;
     }
 
@@ -1872,6 +1895,54 @@ impl InnerRelay {
         }
 
         Ok(())
+    }
+
+    pub(super) async fn reissue_subscription(&self, id: &SubscriptionId) -> Result<(), Error> {
+        self.ensure_operational()?;
+
+        if !self.capabilities.can_read() {
+            return Err(Error::read_disabled());
+        }
+
+        // Like `queue_msg`, hold the lock until the REQ is queued and tracked,
+        // so the restoration on reconnect can't send another REQ in between.
+        let subscriptions = self.atomic.subscriptions.write().await;
+
+        let data: &SubscriptionData = subscriptions
+            .get(id)
+            .ok_or_else(|| Error::not_found("subscription not found"))?;
+
+        if data.is_auto_closing {
+            return Err(Error::invalid_msg(
+                "auto-closing subscriptions can't be reissued",
+            ));
+        }
+
+        let close: ClientMessage<'_> = ClientMessage::Close(Cow::Borrowed(id));
+        let req: ClientMessage<'_> = ClientMessage::Req {
+            subscription_id: Cow::Borrowed(id),
+            filters: data.filters.iter().map(Cow::Borrowed).collect(),
+        };
+
+        let pending_req: Option<PendingReq> = data
+            .pending_req_counter
+            .as_ref()
+            .map(|counter| counter.track(id.clone()));
+
+        // A lone CLOSE would leave the relay without the subscription, and a lone REQ
+        // would repeat an open ID, which some relays reject as a duplicate.
+        self.atomic.channels.send_client_msgs([
+            JsonMessageItem {
+                json: close.as_json(),
+                confirmation: None,
+                pending_req: None,
+            },
+            JsonMessageItem {
+                json: req.as_json(),
+                confirmation: None,
+                pending_req,
+            },
+        ])
     }
 
     pub(super) fn spawn_auto_closing_handler(
@@ -3860,6 +3931,54 @@ mod tests {
         assert_eq!(data.received_events.load(Ordering::SeqCst), 0);
     }
 
+    #[tokio::test]
+    async fn req_resent_on_same_connection_resets_limit_tracking_when_dispatched() {
+        let ControlledRelay {
+            relay,
+            mut transport,
+        } = ControlledRelay::with_opts(RelayOptions::default().verify_subscriptions(true));
+        let id: SubscriptionId = SubscriptionId::new("live");
+        let filter: Filter = Filter::new().kind(Kind::TextNote).limit(1);
+
+        relay.connect();
+
+        let (connection, recorded) = recording_connection();
+        assert!(transport.next_dial().await.send(Ok(connection)).is_ok());
+        wait_for_status(&relay, RelayStatus::Connected).await;
+
+        relay
+            .subscribe(filter.clone())
+            .with_id(id.clone())
+            .await
+            .unwrap();
+        flush_outbound(&relay).await;
+
+        let mut notifications: NotificationStream<RelayNotification> = relay.notifications();
+        let event: Event = EventBuilder::new(Kind::TextNote, "stored event")
+            .finalize(&Keys::generate())
+            .unwrap();
+        recorded.reply(RelayMessage::event(id.clone(), event));
+        recorded.reply(RelayMessage::eose(id.clone()));
+        wait_for_eose(&mut notifications, &id).await;
+
+        relay
+            .send_msg(ClientMessage::close(id.clone()))
+            .await
+            .unwrap();
+        relay
+            .send_msg(ClientMessage::req(id.clone(), filter))
+            .await
+            .unwrap();
+        flush_outbound(&relay).await;
+
+        // The relay answers the new REQ with a new stored-events query.
+        let subscriptions = relay.inner.atomic.subscriptions.read().await;
+        let data: &SubscriptionData = subscriptions.get(&id).unwrap();
+        assert_eq!(data.subscribed_connection, 1);
+        assert!(!data.received_eose);
+        assert_eq!(data.received_events.load(Ordering::SeqCst), 0);
+    }
+
     #[test]
     fn pending_req_counter_does_not_underflow() {
         let counter = PendingReqCounter::default();
@@ -3973,6 +4092,275 @@ mod tests {
             .filter(|frame| frame.starts_with(&req))
             .count();
         assert_eq!(reqs, 1, "frames on first session: {frames:?}");
+    }
+
+    #[tokio::test]
+    async fn subscription_received_eose_tracks_current_req() {
+        let ControlledRelay {
+            relay,
+            mut transport,
+        } = ControlledRelay::new();
+        let id: SubscriptionId = SubscriptionId::new("live");
+
+        assert_eq!(relay.subscription_received_eose(&id).await, None);
+
+        relay.connect();
+
+        let (connection, recorded) = recording_connection();
+        assert!(transport.next_dial().await.send(Ok(connection)).is_ok());
+        wait_for_status(&relay, RelayStatus::Connected).await;
+
+        relay
+            .subscribe(Filter::new().kind(Kind::TextNote))
+            .with_id(id.clone())
+            .await
+            .unwrap();
+        flush_outbound(&relay).await;
+
+        assert_eq!(relay.subscription_received_eose(&id).await, Some(false));
+
+        let mut notifications: NotificationStream<RelayNotification> = relay.notifications();
+        recorded.reply(RelayMessage::eose(id.clone()));
+        wait_for_eose(&mut notifications, &id).await;
+
+        assert_eq!(relay.subscription_received_eose(&id).await, Some(true));
+    }
+
+    /// Returns the `CLOSE` and `REQ` frames that reissue the subscription.
+    fn reissue_frames(id: &SubscriptionId, filter: &Filter) -> [String; 2] {
+        [
+            ClientMessage::close(id.clone()).as_json(),
+            ClientMessage::req(id.clone(), filter.clone()).as_json(),
+        ]
+    }
+
+    #[tokio::test]
+    async fn reissued_subscription_restarts_eose_and_limit_tracking() {
+        let ControlledRelay {
+            relay,
+            mut transport,
+        } = ControlledRelay::with_opts(RelayOptions::default().verify_subscriptions(true));
+        let id: SubscriptionId = SubscriptionId::new("live");
+        let filter: Filter = Filter::new().kind(Kind::TextNote).limit(1);
+
+        relay.connect();
+
+        let (connection, mut recorded) = recording_connection();
+        assert!(transport.next_dial().await.send(Ok(connection)).is_ok());
+        wait_for_status(&relay, RelayStatus::Connected).await;
+
+        relay
+            .subscribe(filter.clone())
+            .with_id(id.clone())
+            .await
+            .unwrap();
+        flush_outbound(&relay).await;
+        recorded.sent_text();
+
+        let mut notifications: NotificationStream<RelayNotification> = relay.notifications();
+        let stored: Event = EventBuilder::new(Kind::TextNote, "stored event")
+            .finalize(&Keys::generate())
+            .unwrap();
+        recorded.reply(RelayMessage::event(id.clone(), stored.clone()));
+        recorded.reply(RelayMessage::eose(id.clone()));
+        wait_for_eose(&mut notifications, &id).await;
+
+        assert_eq!(relay.subscription_received_eose(&id).await, Some(true));
+
+        relay.reissue_subscription(&id).await.unwrap();
+        let barrier: SubscriptionId = flush_outbound(&relay).await;
+
+        let [close, req] = reissue_frames(&id, &filter);
+        assert_eq!(
+            recorded.sent_text(),
+            vec![close, req, ClientMessage::close(barrier).as_json()]
+        );
+
+        // Dispatching the REQ on the same connection starts a new stored-events query.
+        {
+            let subscriptions = relay.inner.atomic.subscriptions.read().await;
+            let data: &SubscriptionData = subscriptions.get(&id).unwrap();
+            assert!(!data.received_eose);
+            assert_eq!(data.received_events.load(Ordering::SeqCst), 0);
+        }
+
+        // The relay sends the stored event again, within the limit of the new query.
+        recorded.reply(RelayMessage::event(id.clone(), stored));
+        recorded.reply(RelayMessage::eose(id.clone()));
+        wait_for_eose(&mut notifications, &id).await;
+
+        assert_eq!(relay.subscription_received_eose(&id).await, Some(true));
+
+        let subscriptions = relay.inner.atomic.subscriptions.read().await;
+        let data: &SubscriptionData = subscriptions.get(&id).unwrap();
+        assert_eq!(data.received_events.load(Ordering::SeqCst), 1);
+    }
+
+    async fn reissue_queues_nothing_without_room_for_both_frames(free_slots: usize) {
+        let controlled = ControlledRelay::new();
+        let relay = &controlled.relay;
+        // Holding the queue keeps the connection task from draining it.
+        let mut queue = relay.inner.atomic.channels.rx_nostr().await;
+        let sender: &Sender<JsonMessageItem> = &relay.inner.atomic.channels.nostr.0;
+        let filler: ClientMessage = ClientMessage::close(SubscriptionId::new("filler"));
+
+        relay.connect();
+        let id: SubscriptionId = relay.subscribe(Filter::new()).await.unwrap();
+        drop(queue.try_recv().unwrap());
+
+        while sender.capacity() > free_slots {
+            relay.send_msg(filler.clone()).await.unwrap();
+        }
+
+        let err: Error = relay.reissue_subscription(&id).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::State);
+        assert_eq!(sender.capacity(), free_slots);
+
+        while let Ok(item) = queue.try_recv() {
+            assert_eq!(item.json, filler.as_json());
+        }
+
+        let subscriptions = relay.inner.atomic.subscriptions.read().await;
+        let data: &SubscriptionData = subscriptions.get(&id).unwrap();
+        assert!(!data.pending_req_counter.as_ref().unwrap().has_pending());
+    }
+
+    #[tokio::test]
+    async fn reissue_into_full_queue_queues_nothing() {
+        reissue_queues_nothing_without_room_for_both_frames(0).await;
+    }
+
+    #[tokio::test]
+    async fn reissue_into_queue_with_one_free_slot_queues_nothing() {
+        reissue_queues_nothing_without_room_for_both_frames(1).await;
+    }
+
+    #[tokio::test]
+    async fn subscription_reissued_while_disconnected_is_sent_once_after_reconnect() {
+        let opts: RelayOptions = RelayOptions::default()
+            .adjust_retry_interval(false)
+            .retry_interval(Duration::from_secs(1));
+
+        let ControlledRelay {
+            relay,
+            mut transport,
+        } = ControlledRelay::with_opts(opts);
+        let id: SubscriptionId = SubscriptionId::new("live");
+        let filter: Filter = Filter::new().kind(Kind::TextNote);
+
+        relay.connect();
+
+        let (connection, first) = recording_connection();
+        assert!(transport.next_dial().await.send(Ok(connection)).is_ok());
+        wait_for_status(&relay, RelayStatus::Connected).await;
+
+        relay
+            .subscribe(filter.clone())
+            .with_id(id.clone())
+            .await
+            .unwrap();
+        flush_outbound(&relay).await;
+
+        let mut notifications: NotificationStream<RelayNotification> = relay.notifications();
+        first.reply(RelayMessage::eose(id.clone()));
+        wait_for_eose(&mut notifications, &id).await;
+
+        first.close();
+        wait_for_status(&relay, RelayStatus::Disconnected).await;
+
+        relay.reissue_subscription(&id).await.unwrap();
+
+        // Queueing alone leaves the tracking of the previous REQ intact.
+        assert_eq!(relay.subscription_received_eose(&id).await, Some(true));
+
+        let (connection, mut second) = recording_connection();
+        assert!(transport.next_dial().await.send(Ok(connection)).is_ok());
+        wait_for_status(&relay, RelayStatus::Connected).await;
+        let barrier: SubscriptionId = flush_outbound(&relay).await;
+
+        // The queued frames replace the automatic restoration of the subscription.
+        let [close, req] = reissue_frames(&id, &filter);
+        let frames: Vec<String> = second.sent_text();
+        assert_eq!(
+            frames,
+            vec![close, req, ClientMessage::close(barrier.clone()).as_json()]
+        );
+
+        assert_eq!(relay.subscription_received_eose(&id).await, Some(false));
+
+        reply_rejecting_duplicate_reqs(&second, &frames);
+        second.reply(RelayMessage::eose(barrier.clone()));
+        wait_for_eose(&mut notifications, &barrier).await;
+
+        assert!(relay.inner.has_subscription(&id).await);
+        assert_eq!(relay.subscription_received_eose(&id).await, Some(true));
+    }
+
+    #[tokio::test]
+    async fn reissue_requires_registered_long_lived_subscription() {
+        let controlled = ControlledRelay::new();
+        let relay = &controlled.relay;
+        let queue = relay.inner.atomic.channels.rx_nostr().await;
+
+        relay.connect();
+
+        let err: Error = relay
+            .reissue_subscription(&SubscriptionId::new("unknown"))
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::NotFound);
+        assert_eq!(err.to_string(), "subscription not found");
+
+        let id: SubscriptionId = SubscriptionId::new("auto-closing");
+        relay
+            .inner
+            .add_auto_closing_subscription(id.clone(), vec![Filter::new()])
+            .await
+            .unwrap();
+
+        let err: Error = relay.reissue_subscription(&id).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Invalid);
+        assert_eq!(
+            err.to_string(),
+            "auto-closing subscriptions can't be reissued"
+        );
+
+        assert!(queue.is_empty());
+    }
+
+    #[tokio::test]
+    async fn reissue_requires_read_capability() {
+        let controlled = ControlledRelay::new();
+        let relay = &controlled.relay;
+        let mut queue = relay.inner.atomic.channels.rx_nostr().await;
+
+        relay.connect();
+        let id: SubscriptionId = relay.subscribe(Filter::new()).await.unwrap();
+        drop(queue.try_recv().unwrap());
+
+        relay.capabilities().remove(RelayCapabilities::READ);
+
+        let err: Error = relay.reissue_subscription(&id).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Unsupported);
+        assert_eq!(err.to_string(), "read actions are disabled");
+
+        assert!(queue.is_empty());
+    }
+
+    #[tokio::test]
+    async fn reissue_requires_operational_relay() {
+        let relay: Relay = Relay::new(RelayUrl::parse("wss://relay.example.com").unwrap());
+        let id: SubscriptionId = SubscriptionId::new("live");
+
+        relay
+            .inner
+            .add_long_lived_subscription(id.clone(), vec![Filter::new()])
+            .await
+            .unwrap();
+
+        let err: Error = relay.reissue_subscription(&id).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::State);
+        assert_eq!(err.to_string(), "relay is initialized but not ready");
     }
 }
 

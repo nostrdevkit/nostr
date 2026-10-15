@@ -185,6 +185,22 @@ impl Relay {
         self.inner.subscription(id).await
     }
 
+    /// Check if the relay answered the current `REQ` of a subscription with `EOSE`.
+    ///
+    /// `EOSE` is recorded even when notification receivers fall behind,
+    /// so this tells a receiver that missed notifications whether the relay
+    /// finished sending the stored events of the subscription.
+    ///
+    /// It returns `Some(false)` from when a new `REQ` for the subscription is sent
+    /// (e.g., when it is restored after a reconnection or reissued with [`Relay::reissue_subscription`])
+    /// until the relay answers it with `EOSE`.
+    ///
+    /// Returns `None` if the subscription isn't registered.
+    #[inline]
+    pub async fn subscription_received_eose(&self, id: &SubscriptionId) -> Option<bool> {
+        self.inner.subscription_received_eose(id).await
+    }
+
     /// Get options
     #[inline]
     pub fn opts(&self) -> &RelayOptions {
@@ -369,6 +385,26 @@ impl Relay {
     #[inline]
     pub fn unsubscribe_all(&self) -> UnsubscribeAll<'_> {
         UnsubscribeAll::new(self)
+    }
+
+    /// Reissue a long-lived subscription, so the relay sends its stored events again.
+    ///
+    /// Queues `CLOSE` followed by a `REQ` with the stored filters, both or neither.
+    /// The relay is never left without the subscription,
+    /// and never receives a `REQ` for an ID it still has open.
+    ///
+    /// If the relay isn't connected, both messages wait in the queue
+    /// and are sent on the next connection instead of the automatic restoration of the subscription,
+    /// so the relay still receives a single `REQ`.
+    ///
+    /// Returns an error if the subscription isn't registered or is auto-closing,
+    /// if the relay isn't operational or can't read, or if the queue can't fit both messages.
+    #[inline]
+    pub fn reissue_subscription<'id>(
+        &self,
+        id: &'id SubscriptionId,
+    ) -> ReissueSubscription<'_, 'id> {
+        ReissueSubscription::new(self, id)
     }
 
     /// Stream events from relay
