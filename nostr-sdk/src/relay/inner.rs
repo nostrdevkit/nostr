@@ -87,11 +87,19 @@ impl PendingReqCounter {
 
     #[inline]
     fn decrement(&self) {
-        let _ = self
-            .0
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
-                count.checked_sub(1)
-            });
+        // Saturating decrement. Newer Rust deprecates `fetch_update` in favor of
+        // `try_update`, which is above the MSRV, so spell out its CAS loop.
+        let mut count: usize = self.0.load(Ordering::SeqCst);
+
+        while let Some(next) = count.checked_sub(1) {
+            match self
+                .0
+                .compare_exchange_weak(count, next, Ordering::SeqCst, Ordering::SeqCst)
+            {
+                Ok(_) => return,
+                Err(actual) => count = actual,
+            }
+        }
     }
 
     #[inline]
