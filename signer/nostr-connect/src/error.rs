@@ -74,15 +74,7 @@ impl Error {
         Self::simple(ErrorKind::Timeout)
     }
 
-    pub(crate) fn unexpected_uri() -> Self {
-        Self::with_static_message(ErrorKind::Invalid, "unexpected URI")
-    }
-
     pub(crate) fn public_key_not_match_app_keys() -> Self {
         Self::with_static_message(ErrorKind::Invalid, "public key not match app keys")
-    }
-
-    pub(crate) fn no_client_secret() -> Self {
-        Self::with_static_message(ErrorKind::State, "missing client secret")
     }
 }

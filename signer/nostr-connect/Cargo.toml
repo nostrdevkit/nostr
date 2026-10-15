@@ -26,7 +26,6 @@ rustls-tls-webpki-roots = ["nostr-sdk/rustls-tls-webpki-roots"]
 
 [dependencies]
 async-utility.workspace = true
-futures-core = "0.3"
 nostr = { workspace = true, features = ["std", "rand", "nip04", "nip44", "nip46"] }
 nostr-sdk.workspace = true
 opaquerr.workspace = true
@@ -34,13 +33,9 @@ tokio = { workspace = true, features = ["sync"] }
 tracing.workspace = true
 
 [dev-dependencies]
-dialoguer = "0.12"
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 webbrowser = "1.1"
 nostr-sdk = { path = "../../nostr-sdk", features = ["local-relay"] }
 
 [[example]]
 name = "handle-auth-url"
-
-[[example]]
-name = "nostr-connect-signer"
