@@ -750,6 +750,7 @@ impl RelayPool {
         id: Option<SubscriptionId>,
         timeout: Option<Duration>,
         policy: ReqExitPolicy,
+        report_terminal_errors: bool,
     ) -> Result<ReceiverStream<(RelayUrl, RelayStreamEvent)>, Error> {
         // Check if `targets` map is empty
         if filters.is_empty() {
@@ -785,7 +786,7 @@ impl RelayPool {
                     .with_id(id.clone())
                     .maybe_timeout(timeout)
                     .policy(policy)
-                    .into_relay_event_stream(),
+                    .into_relay_event_stream(report_terminal_errors),
             );
         }
 
@@ -848,10 +849,9 @@ impl RelayPool {
                                                     break;
                                                 }
                                             }
-                                            Some(RelayStreamEvent::Completed) => {
-                                                if tx.send((url.clone(), RelayStreamEvent::Completed)).await.is_err() {
-                                                    break;
-                                                }
+                                            // Forward the terminal outcome and stop
+                                            Some(outcome @ (RelayStreamEvent::Completed | RelayStreamEvent::LimitReached)) => {
+                                                let _ = tx.send((url.clone(), outcome)).await;
                                                 break;
                                             }
                                             None => break,

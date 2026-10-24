@@ -850,6 +850,10 @@ impl Client {
     /// - All relay streams terminate,
     /// - Or an optional timeout expires.
     ///
+    /// Awaiting the builder returns events and relay errors, without the terminal outcome of each relay.
+    /// Use [`StreamEvents::with_outcomes`] to distinguish completion from reached limits,
+    /// timeouts and disconnections.
+    ///
     /// # Errors
     ///
     /// Returns an error if:

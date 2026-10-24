@@ -49,6 +49,7 @@
 - Add `LocalRelayBuilder::new_event_channel_size` for customizing the size of the channel used to notify new received events
 - Add opt-in receiver gap reporting with `NotificationStream::with_gaps()`.
 - Add `Relay::reissue_subscription` to queue `CLOSE` and `REQ` for a long-lived subscription as a single unit, so the relay sends its stored events again.
+- Add `StreamEvents::with_outcomes` to relay and client requests, to distinguish completion from reached event limits, timeouts, disconnections and relay errors.
 
 ### Fixed
 
@@ -64,6 +65,8 @@
 - Avoid duplicate subscription `REQ`s after reconnecting.
 - Reset subscription EOSE and event-limit tracking when a `REQ` is sent again on the same connection.
 - Avoid a duplicate subscription `REQ` when another `REQ` for it is queued while it's being restored after a reconnection.
+- Report notification lag or closure as an error in auto-closing requests, instead of completing them.
+- Don't mark missing gossip lists as checked when a relay closes the fallback request before `EOSE`.
 
 ### Deprecated
 
