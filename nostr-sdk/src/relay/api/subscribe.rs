@@ -358,6 +358,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_subscribe_auto_closing_is_removed_after_timeout() {
+        let mock = MockRelay::run().await.unwrap();
+        let relay = Relay::new(mock.url().await);
+        relay
+            .try_connect()
+            .timeout(Duration::from_millis(500))
+            .await
+            .unwrap();
+
+        // No stored event matches, so only the timeout can end the subscription.
+        let id = SubscriptionId::new("auto-closing-timeout");
+        let close_opts = SubscribeAutoCloseOptions::default()
+            .exit_policy(ReqExitPolicy::WaitForEvents(1))
+            .timeout(Some(Duration::from_millis(100)));
+
+        relay
+            .subscribe(Filter::new().kind(Kind::TextNote))
+            .with_id(id.clone())
+            .close_on(close_opts)
+            .await
+            .unwrap();
+
+        time::timeout(Some(Duration::from_secs(2)), async {
+            while relay.subscription(&id).await.is_some() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
     async fn test_subscribe_dont_resubscribes_after_auth_required_closed_without_authenticator() {
         let local = setup_nip42_read_local_relay().await;
 

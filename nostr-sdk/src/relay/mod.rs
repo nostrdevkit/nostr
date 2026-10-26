@@ -46,6 +46,18 @@ enum SubscriptionAutoClosedReason {
     AuthenticationFailed,
     /// Closed
     Closed(String),
+    /// Relay closed the request without satisfying the exit policy.
+    RelayClosed(String),
+    /// Notification receiver skipped items
+    Lagged(u64),
+    /// Notification channel closed before policy completion
+    ReceiverClosed,
+    /// Request or idle timeout
+    TimedOut,
+    /// Relay disconnected before policy completion
+    Disconnected,
+    /// Configured event limit was reached
+    LimitReached,
     /// Completed
     Completed,
 }
@@ -392,7 +404,11 @@ impl Relay {
         ReissueSubscription::new(self, id)
     }
 
-    /// Stream events from relay
+    /// Stream events from relay.
+    ///
+    /// Awaiting the builder preserves the legacy event stream behavior: timeout
+    /// and disconnection end the stream without a terminal item. Use
+    /// [`StreamEvents::with_outcomes`] to inspect completion, limits, and failures.
     #[inline]
     pub fn stream_events<F>(&self, filters: F) -> StreamEvents<'_>
     where
@@ -402,6 +418,9 @@ impl Relay {
     }
 
     /// Fetch events
+    ///
+    /// Awaiting the builder can return partial events after a timeout or disconnect.
+    /// Use [`StreamEvents::with_outcomes`] when the terminal outcome matters.
     #[inline]
     pub fn fetch_events<F>(&self, filters: F) -> FetchEvents<'_>
     where

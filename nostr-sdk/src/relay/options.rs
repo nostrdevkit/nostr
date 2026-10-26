@@ -163,6 +163,7 @@ pub struct SubscribeAutoCloseOptions {
     pub(super) exit_policy: ReqExitPolicy,
     pub(super) timeout: Option<Duration>,
     pub(super) idle_timeout: Option<Duration>,
+    pub(super) report_relay_closed: bool,
 }
 
 impl SubscribeAutoCloseOptions {
@@ -181,6 +182,11 @@ impl SubscribeAutoCloseOptions {
     /// Automatically close subscription if no notifications/events are received within the [`Duration`].
     pub fn idle_timeout(mut self, timeout: Option<Duration>) -> Self {
         self.idle_timeout = timeout;
+        self
+    }
+
+    pub(super) fn report_relay_closed(mut self, report: bool) -> Self {
+        self.report_relay_closed = report;
         self
     }
 }

@@ -99,7 +99,7 @@ mod tests {
     use super::*;
     use crate::authenticator::SignerAuthenticator;
     use crate::local_relay::*;
-    use crate::relay::{RelayOptions, RelayStatus};
+    use crate::relay::{RelayOptions, RelayStatus, ReqExitPolicy};
     use crate::test_utils::{
         setup_nip42_read_local_relay, setup_relay, setup_relay_with_authenticator,
     };
@@ -127,6 +127,18 @@ mod tests {
         }
 
         (relay, mock)
+    }
+
+    #[tokio::test]
+    async fn fetch_events_keeps_partial_events_when_request_times_out() {
+        let (relay, _mock) = setup_event_fetching_relay(1).await;
+        let events = relay
+            .fetch_events(Filter::new().kind(Kind::TextNote))
+            .policy(ReqExitPolicy::WaitDurationAfterEOSE(Duration::from_secs(1)))
+            .timeout(Duration::from_millis(100))
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 1);
     }
 
     #[tokio::test]
