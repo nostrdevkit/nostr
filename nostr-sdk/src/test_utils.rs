@@ -79,7 +79,7 @@ pub(crate) async fn wait_for_eose(
 ) {
     wait_for_notification(notifications, "subscription EOSE", |notification| {
         matches!(notification, RelayNotification::Message { message }
-            if matches!(message.as_ref(), RelayMessage::EndOfStoredEvents(id)
+            if matches!(message.as_ref(), RelayMessage::EndOfStoredEvents { subscription_id: id, .. }
                 if id.as_ref() == subscription))
     })
     .await;

@@ -60,6 +60,7 @@ pub use crate::nips::nip60::{self, *};
 pub use crate::nips::nip62::{self, *};
 pub use crate::nips::nip65::{self, *};
 pub use crate::nips::nip66::{self, *};
+pub use crate::nips::nip67::{self, *};
 pub use crate::nips::nip70::{self, *};
 pub use crate::nips::nip73::{self, *};
 pub use crate::nips::nip88::{self, *};

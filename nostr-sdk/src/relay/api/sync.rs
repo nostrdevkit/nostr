@@ -538,7 +538,9 @@ pub(super) async fn sync(
                             false
                         }
                     }
-                    RelayMessage::EndOfStoredEvents(subscription_id) => {
+                    RelayMessage::EndOfStoredEvents {
+                        subscription_id, ..
+                    } => {
                         #[allow(clippy::collapsible_match)]
                         if subscription_id.as_ref() == &cleanup.down_id {
                             in_flight_down = None;
@@ -776,7 +778,10 @@ mod tests {
                 let stream = stream.filter_map(move |message| async move {
                     match message {
                         Ok(Message::Text(text)) => match RelayMessage::from_json(&text) {
-                            Ok(RelayMessage::EndOfStoredEvents(id)) => {
+                            Ok(RelayMessage::EndOfStoredEvents {
+                                subscription_id: id,
+                                ..
+                            }) => {
                                 let reason = match response {
                                     ClosedResponse::Rejected => "blocked: reads denied",
                                     _ => "",
@@ -829,7 +834,7 @@ mod tests {
                         if let Ok(Message::Text(text)) = &message {
                             if matches!(
                                 RelayMessage::from_json(text),
-                                Ok(RelayMessage::EndOfStoredEvents(_))
+                                Ok(RelayMessage::EndOfStoredEvents { .. })
                             ) && !first_eose_seen.swap(true, Ordering::SeqCst)
                             {
                                 first_eose_held.notify_one();

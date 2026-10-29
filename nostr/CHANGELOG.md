@@ -32,6 +32,7 @@
 ### Breaking changes
 
 - Require `CryptoRng` trait for secret key generation (https://github.com/nostrdevkit/nostr/pull/1437)
+- Change `RelayMessage::EndOfStoredEvents(id)` to `RelayMessage::EndOfStoredEvents { subscription_id, hints }` (https://github.com/nostrdevkit/nostr/pull/1501)
 
 ### Added
 
@@ -39,7 +40,8 @@
 - Take an `Into<Tag>` iterator instead of `Tag` iterator in
   `GiftWrapBuilder::extra_tags`, `PrivateDirectMessageBuilder::extra_tags`
   and `PrivateDirectMessageBuilder::rumor_extra_tags` (https://github.com/nostrdevkit/nostr/pull/1447)
-- nip47 BIP321 methods `pay` and `receive` (https://github.com/nostrdevkit/nostr/pull/1465)
+- Add NIP-47 BIP321 methods `pay` and `receive` (https://github.com/nostrdevkit/nostr/pull/1465)
+- Add `nip67::EoseHint` and `RelayMessage::eose_with_hints` for NIP-67 EOSE messages (https://github.com/nostrdevkit/nostr/pull/1501)
 
 ### Security
 

@@ -7,6 +7,7 @@
 
 use alloc::borrow::{Cow, ToOwned};
 use alloc::string::String;
+use alloc::vec::Vec;
 use core::fmt;
 
 use serde::de::{self, SeqAccess, Visitor};
@@ -15,6 +16,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::SubscriptionId;
 use crate::event::{Event, EventId};
+use crate::nips::nip67::EoseHint;
 use crate::util::impl_json_methods;
 
 /// A string that must be exactly one word.
@@ -174,10 +176,18 @@ pub enum RelayMessage<'a> {
     ///
     /// Used to indicate the end of stored events and the beginning of events newly received in real-time.
     ///
-    /// JSON: `["EOSE", <subscription_id>]`.
+    /// JSON: `["EOSE", <subscription_id>]` or `["EOSE", <subscription_id>, [<hint>, ...]]`.
     ///
     /// <https://github.com/nostr-protocol/nips/blob/master/01.md>
-    EndOfStoredEvents(Cow<'a, SubscriptionId>),
+    /// <https://github.com/nostr-protocol/nips/blob/master/67.md>
+    EndOfStoredEvents {
+        /// Subscription ID to which the hints apply.
+        subscription_id: Cow<'a, SubscriptionId>,
+        /// Optional completeness hints supplied by the relay.
+        ///
+        /// `None` means the relay omitted the hint array; `Some` may be empty.
+        hints: Option<Vec<EoseHint>>,
+    },
     /// Notice
     ///
     /// Used to send human-readable error messages or other things to clients.
@@ -269,7 +279,19 @@ impl RelayMessage<'_> {
     /// Create `EOSE` message
     #[inline]
     pub fn eose(subscription_id: SubscriptionId) -> Self {
-        Self::EndOfStoredEvents(Cow::Owned(subscription_id))
+        Self::EndOfStoredEvents {
+            subscription_id: Cow::Owned(subscription_id),
+            hints: None,
+        }
+    }
+
+    /// Create an `EOSE` message with NIP-67 completeness hints.
+    #[inline]
+    pub fn eose_with_hints(subscription_id: SubscriptionId, hints: Vec<EoseHint>) -> Self {
+        Self::EndOfStoredEvents {
+            subscription_id: Cow::Owned(subscription_id),
+            hints: Some(hints),
+        }
     }
 
     /// Create `OK` message
@@ -311,7 +333,8 @@ impl RelayMessage<'_> {
     /// length rather than inherit a default that may not fit.
     const fn len(&self) -> usize {
         match self {
-            Self::Notice(..) | Self::EndOfStoredEvents(..) | Self::Auth { .. } => 2,
+            Self::Notice(..) | Self::Auth { .. } => 2,
+            Self::EndOfStoredEvents { hints, .. } => 2 + hints.is_some() as usize,
             Self::Event { .. }
             | Self::Closed { .. }
             | Self::Count { .. }
@@ -353,9 +376,15 @@ impl Serialize for RelayMessage<'_> {
                 seq.serialize_element(subscription_id)?;
                 seq.serialize_element(message)?;
             }
-            Self::EndOfStoredEvents(subscription_id) => {
+            Self::EndOfStoredEvents {
+                subscription_id,
+                hints,
+            } => {
                 seq.serialize_element("EOSE")?;
                 seq.serialize_element(subscription_id)?;
+                if let Some(hints) = hints {
+                    seq.serialize_element(hints)?;
+                }
             }
             Self::Ok {
                 event_id,
@@ -453,8 +482,11 @@ impl<'de> Visitor<'de> for RelayMessageVisitor {
                 status: next!(),
                 message: Cow::Owned(next!()),
             },
-            // ["EOSE", <subscription_id>]
-            "EOSE" => RelayMessage::EndOfStoredEvents(Cow::Owned(next!())),
+            // ["EOSE", <subscription_id>, <optional hints>]
+            "EOSE" => RelayMessage::EndOfStoredEvents {
+                subscription_id: Cow::Owned(next!()),
+                hints: seq.next_element()?,
+            },
             // ["NOTICE", <message>]
             "NOTICE" => RelayMessage::Notice(Cow::Owned(next!())),
             // ["CLOSED", <subscription_id>, <message>]
@@ -706,21 +738,71 @@ mod tests {
         );
     }
 
-    /// A test to make sure we can parse NIP-67.
     #[test]
     fn parse_nip67() {
-        const MSG: &str = r#"["EOSE", "sub", ["finish"]]"#;
-        assert_eq!(
-            RelayMessage::EndOfStoredEvents(Cow::Owned(SubscriptionId::new("sub"))),
-            RelayMessage::from_json(MSG).unwrap()
-        );
+        let cases: [(&str, Option<Vec<EoseHint>>); 5] = [
+            (r#"["EOSE","sub"]"#, None),
+            (r#"["EOSE","sub",[]]"#, Some(vec![])),
+            (r#"["EOSE","sub",["finish"]]"#, Some(vec![EoseHint::Finish])),
+            (
+                r#"["EOSE","sub",["more","auth"]]"#,
+                Some(vec![EoseHint::More, EoseHint::Auth]),
+            ),
+            (
+                r#"["EOSE","sub",["Finish","future"]]"#,
+                Some(vec![
+                    EoseHint::Unknown(String::from("Finish")),
+                    EoseHint::Unknown(String::from("future")),
+                ]),
+            ),
+        ];
+
+        for (json, hints) in cases {
+            let expected: RelayMessage = match hints {
+                Some(hints) => RelayMessage::eose_with_hints(SubscriptionId::new("sub"), hints),
+                None => RelayMessage::eose(SubscriptionId::new("sub")),
+            };
+            assert_eq!(RelayMessage::from_json(json).unwrap(), expected, "{json}");
+        }
+    }
+
+    #[test]
+    fn nip67_round_trip_preserves_hints() {
+        for json in [
+            r#"["EOSE","sub"]"#,
+            r#"["EOSE","sub",[]]"#,
+            r#"["EOSE","sub",["finish"]]"#,
+            r#"["EOSE","sub",["more"]]"#,
+            r#"["EOSE","sub",["auth","finish"]]"#,
+            r#"["EOSE","sub",["future","more","more",""]]"#,
+            r#"["EOSE","sub",["hint-\"quoted\"-雪"]]"#,
+        ] {
+            let message: RelayMessage = RelayMessage::from_json(json).unwrap();
+            let expected: serde_json::Value = serde_json::from_str(json).unwrap();
+            let actual: serde_json::Value = serde_json::from_str(&message.as_json()).unwrap();
+            assert_eq!(actual, expected, "{json}");
+        }
+    }
+
+    #[test]
+    fn nip67_rejects_malformed_hints() {
+        for json in [
+            r#"["EOSE","sub",null]"#,
+            r#"["EOSE","sub","finish"]"#,
+            r#"["EOSE","sub",{}]"#,
+            r#"["EOSE","sub",[1]]"#,
+            r#"["EOSE","sub",["finish",null]]"#,
+            r#"["EOSE","sub",[["more"]]]"#,
+        ] {
+            assert!(RelayMessage::from_json(json).is_err(), "{json}");
+        }
     }
 
     /// Trailing elements are reserved for future extensions, so every variant
     /// must ignore them rather than reject the message.
     #[test]
     fn parse_trailing_elements() {
-        let cases: [(&str, RelayMessage); 4] = [
+        let cases: [(&str, RelayMessage); 5] = [
             (r#"["NOTICE","hi","extra"]"#, RelayMessage::notice("hi")),
             (
                 r#"["CLOSED","sub","reason",{"a":1}]"#,
@@ -733,6 +815,10 @@ mod tests {
             (
                 r#"["AUTH","challenge",1,2,3]"#,
                 RelayMessage::auth("challenge"),
+            ),
+            (
+                r#"["EOSE","sub",["finish"],{"future":true}]"#,
+                RelayMessage::eose_with_hints(SubscriptionId::new("sub"), vec![EoseHint::Finish]),
             ),
         ];
 

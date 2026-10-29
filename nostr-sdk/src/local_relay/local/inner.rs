@@ -1426,7 +1426,10 @@ impl InnerLocalRelay {
 
         send_msg(
             ws_tx,
-            RelayMessage::EndOfStoredEvents(Cow::Borrowed(subscription_id.as_ref())),
+            RelayMessage::EndOfStoredEvents {
+                subscription_id: Cow::Borrowed(subscription_id.as_ref()),
+                hints: None,
+            },
         )
         .await?;
 
@@ -2389,7 +2392,7 @@ mod tests {
         };
         assert!(matches!(
             RelayMessage::from_json(response.as_bytes()).unwrap(),
-            RelayMessage::EndOfStoredEvents(subscription_id)
+            RelayMessage::EndOfStoredEvents { subscription_id, .. }
                 if subscription_id.as_str() == "allowed"
         ));
         assert_eq!(session.query_tokens.count, 0);
