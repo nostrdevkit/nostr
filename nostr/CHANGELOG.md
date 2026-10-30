@@ -32,9 +32,11 @@
 ### Breaking changes
 
 - Require `CryptoRng` trait for secret key generation (https://github.com/nostrdevkit/nostr/pull/1437)
+- Change `RelayMessage::EndOfStoredEvents(id)` to `RelayMessage::EndOfStoredEvents { subscription_id, hints }` to preserve optional NIP-67 completeness hints. Use `{ subscription_id, .. }` to match EOSE without inspecting hints; `RelayMessage::eose(id)` still constructs the legacy two-element message.
 
 ### Added
 
+- Add `nip67::EoseHint` and `RelayMessage::eose_with_hints` for NIP-67 EOSE messages, preserving unknown hints and the distinction between omitted and empty hint arrays.
 - Impl `From<PublicKey>` for `Tag` (https://github.com/nostrdevkit/nostr/pull/1446)
 - Take an `Into<Tag>` iterator instead of `Tag` iterator in
   `GiftWrapBuilder::extra_tags`, `PrivateDirectMessageBuilder::extra_tags`

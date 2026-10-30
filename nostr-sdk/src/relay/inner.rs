@@ -1486,7 +1486,10 @@ impl InnerRelay {
                             }
                         }
                     }
-                    RelayMessage::EndOfStoredEvents(id) => {
+                    RelayMessage::EndOfStoredEvents {
+                        subscription_id: id,
+                        ..
+                    } => {
                         self.received_eose(id).await;
                     }
                     RelayMessage::Auth { challenge } if self.state.is_authenticator_available() => {
@@ -2158,9 +2161,9 @@ impl InnerRelay {
                                 _ => {}
                             }
                         }
-                        RelayMessage::EndOfStoredEvents(subscription_id)
-                            if subscription_id.as_ref() == id =>
-                        {
+                        RelayMessage::EndOfStoredEvents {
+                            subscription_id, ..
+                        } if subscription_id.as_ref() == id => {
                             received_eose = true;
                             if let ReqExitPolicy::ExitOnEOSE
                             | ReqExitPolicy::WaitDurationAfterEOSE(_) = opts.exit_policy
@@ -2386,6 +2389,7 @@ mod tests {
     use nostr::filter::Filter;
     use nostr::key::Keys;
     use nostr::message::SubscriptionId;
+    use nostr::nips::nip67::EoseHint;
     use nostr::types::RelayUrl;
     use tokio::sync::broadcast::Receiver as BroadcastReceiver;
     use tokio::task::JoinHandle as TokioJoinHandle;
@@ -2763,6 +2767,49 @@ mod tests {
         }
 
         assert_ne!(relay.status(), RelayStatus::Banned);
+    }
+
+    #[tokio::test]
+    async fn nip67_notifications_preserve_hints_and_subscription_id() {
+        let relay: Relay = Relay::new(RelayUrl::parse("wss://relay.example.com").unwrap());
+        let ended: SubscriptionId = SubscriptionId::new("ended");
+        let other: SubscriptionId = SubscriptionId::new("other");
+        for id in [&ended, &other] {
+            relay
+                .inner
+                .add_long_lived_subscription(id.clone(), vec![Filter::new()])
+                .await
+                .unwrap();
+        }
+
+        let mut notifications = relay.notifications();
+        let (tx, _rx) = watch::channel(None);
+        relay
+            .inner
+            .handle_relay_message(r#"["EOSE","ended",["auth","more","future"]]"#, &tx)
+            .await;
+
+        let notification: RelayNotification =
+            tokio::time::timeout(TEST_TIMEOUT, notifications.next())
+                .await
+                .unwrap()
+                .unwrap();
+        let expected: RelayMessage = RelayMessage::eose_with_hints(
+            ended.clone(),
+            vec![
+                EoseHint::Auth,
+                EoseHint::More,
+                EoseHint::Unknown(String::from("future")),
+            ],
+        );
+        assert_eq!(
+            notification,
+            RelayNotification::Message {
+                message: Box::new(expected),
+            }
+        );
+        assert!(relay.subscription(&ended).await.unwrap().received_eose());
+        assert!(!relay.subscription(&other).await.unwrap().received_eose());
     }
 
     #[tokio::test]

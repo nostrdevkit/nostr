@@ -255,9 +255,9 @@ mod tests {
                 if let Message::Text(json) = message {
                     match RelayMessage::from_json(json.as_bytes()).unwrap() {
                         RelayMessage::Notice(..) => received_notice = true,
-                        RelayMessage::EndOfStoredEvents(subscription_id)
-                            if subscription_id.as_str() == "valid" =>
-                        {
+                        RelayMessage::EndOfStoredEvents {
+                            subscription_id, ..
+                        } if subscription_id.as_str() == "valid" => {
                             assert!(received_notice);
                             break;
                         }
@@ -317,9 +317,9 @@ mod tests {
                             assert_eq!(message, "error: invalid negentropy message");
                             neg_errors += 1;
                         }
-                        RelayMessage::EndOfStoredEvents(subscription_id)
-                            if subscription_id.as_str() == "valid" =>
-                        {
+                        RelayMessage::EndOfStoredEvents {
+                            subscription_id, ..
+                        } if subscription_id.as_str() == "valid" => {
                             assert_eq!(neg_errors, 3);
                             break;
                         }
@@ -412,7 +412,7 @@ mod tests {
         };
         assert!(matches!(
             RelayMessage::from_json(eose.as_bytes()).unwrap(),
-            RelayMessage::EndOfStoredEvents(subscription_id)
+            RelayMessage::EndOfStoredEvents { subscription_id, .. }
                 if subscription_id.as_str() == "valid"
         ));
     }
@@ -666,7 +666,7 @@ mod tests {
                 Message::Text(json)
                     if matches!(
                         RelayMessage::from_json(json.as_bytes()).unwrap(),
-                        RelayMessage::EndOfStoredEvents(subscription_id)
+                        RelayMessage::EndOfStoredEvents { subscription_id, .. }
                             if subscription_id.as_str() == "valid"
                     )
             ));

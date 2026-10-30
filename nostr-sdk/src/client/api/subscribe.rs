@@ -107,7 +107,7 @@ mod tests {
 
         let eose = notifications.any(|notification| {
             future::ready(matches!(notification, ClientNotification::Message { ref message, .. }
-                if matches!(message.as_ref(), RelayMessage::EndOfStoredEvents(received) if received.as_ref() == &id)))
+                if matches!(message.as_ref(), RelayMessage::EndOfStoredEvents { subscription_id: received, .. } if received.as_ref() == &id)))
         });
         assert!(
             tokio::time::timeout(Duration::from_secs(5), eose)

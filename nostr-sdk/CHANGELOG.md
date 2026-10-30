@@ -43,6 +43,7 @@
 
 ### Added
 
+- Preserve NIP-67 EOSE hints and their subscription ID in relay and client message notifications. Request exit policies remain unchanged.
 - Add `SyncEvents::with_outcomes` to retain partial reconciliation progress with its terminal error.
 - Add `LocalRelay::connections_left` (https://github.com/nostrdevkit/nostr/pull/1459)
 - Add `LocalRelayBuilderNip42::relay_url` to make it possible to configure a custom `relay_url` for the nip42 challenge validation (https://github.com/nostrdevkit/nostr/pull/1476)
