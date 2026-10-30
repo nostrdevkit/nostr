@@ -21,6 +21,8 @@ use secp256k1::{PublicKey as NormalizedPublicKey, ecdh};
 use zeroize::Zeroizing;
 
 #[cfg(feature = "nip44")]
+pub(crate) mod ct_eq;
+#[cfg(feature = "nip44")]
 pub(crate) mod hkdf;
 mod json;
 pub(crate) mod sha256;

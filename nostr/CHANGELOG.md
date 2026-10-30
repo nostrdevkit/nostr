@@ -44,6 +44,7 @@
 ### Security
 
 - Enforce max length for relay URLs in `RelayUrl::parse` (https://github.com/nostrdevkit/nostr/pull/1451)
+- Use constant-time equality checks for NIP-44 V2 HMAC
 
 ## v0.45.5 - 2026/09/11
 
