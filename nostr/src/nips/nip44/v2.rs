@@ -19,6 +19,7 @@ use zeroize::Zeroizing;
 
 use crate::error::{Error, ErrorKind};
 use crate::key::{PublicKey, SecretKey};
+use crate::util::ct_eq::constant_time_eq;
 use crate::util::{self, hkdf};
 
 const VERSION_SIZE: usize = 1;
@@ -285,7 +286,7 @@ pub fn decrypt_to_bytes(
     engine.input(nonce);
     engine.input(buffer);
     let calculated_mac: [u8; HMAC_SIZE] = engine.finalize().to_byte_array();
-    if mac != calculated_mac.as_slice() {
+    if !constant_time_eq(mac, &calculated_mac) {
         return Err(ErrorV2::InvalidHmac.into());
     }
 
