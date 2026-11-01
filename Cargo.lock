@@ -256,9 +256,9 @@ dependencies = [
 
 [[package]]
 name = "bitcoin_hashes"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a67800fcf7f3ca52f7796d4466948a424326b225950c79d1e76d0458760bb25d"
+checksum = "5304e53726dbe5f93141535e102ed97b5bf4714fbecefdda8f9fb98d7fdaff0e"
 dependencies = [
  "bitcoin-consensus-encoding",
  "bitcoin-internals",
@@ -1723,7 +1723,7 @@ dependencies = [
  "base64",
  "bech32",
  "bip39",
- "bitcoin_hashes 1.1.0",
+ "bitcoin_hashes 1.2.0",
  "cbc",
  "chacha20",
  "chacha20poly1305",
@@ -1747,7 +1747,7 @@ name = "nostr-blossom"
 version = "0.45.1"
 dependencies = [
  "base64",
- "bitcoin_hashes 1.1.0",
+ "bitcoin_hashes 1.2.0",
  "clap",
  "nostr",
  "opaquerr",
@@ -1905,7 +1905,7 @@ dependencies = [
  "async-utility",
  "async-wsocket",
  "base64",
- "bitcoin_hashes 1.1.0",
+ "bitcoin_hashes 1.2.0",
  "faster-hex",
  "futures",
  "hyper",
