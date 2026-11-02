@@ -70,6 +70,10 @@
 - Deprecate `LocalRelayBuilder::max_query_results` and `LocalRelayBuilder::default_filter_limit` (https://github.com/nostrdevkit/nostr/pull/1461)
 - Deprecate `Relay::fetch_events` and `Client::fetch_events`
 
+### Security
+
+- Bind verification cache entries to the event signature, so an invalid signature can't bypass verification for a cached event ID.
+
 ## v0.45.5 - 2026/11/02
 
 ### Security
