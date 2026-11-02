@@ -72,6 +72,7 @@ impl AtomicCipher {
 #[derive(Debug, Clone)]
 pub struct NostrWalletConnect {
     uri: NostrWalletConnectUri,
+    uri_keys: Keys,
     client: Client,
     timeout: Duration,
     cipher: Arc<AtomicCipher>,
@@ -112,8 +113,11 @@ impl NostrWalletConnect {
             None => Client::default(),
         };
 
+        let uri_keys: Keys = Keys::new(builder.uri.secret.clone());
+
         Self {
             uri: builder.uri,
+            uri_keys,
             client,
             timeout: builder.timeout,
             relay_opts: builder.relay,
@@ -244,6 +248,9 @@ impl NostrWalletConnect {
 
         // Unwrap event
         let received_event: Event = res?;
+
+        // Verify the response answers this specific request
+        verify_response_correlation(&self.uri_keys, &received_event, event.id)?;
 
         // Parse response
         let response: Response = Response::from_event(&self.uri, &received_event, cipher)?;
@@ -425,12 +432,34 @@ impl NostrWalletConnect {
     }
 }
 
+/// Check that a NIP-47 response event answers the given request event.
+fn verify_response_correlation(
+    uri_keys: &Keys,
+    response: &Event,
+    request_id: EventId,
+) -> Result<(), Error> {
+    // The request ID is randomly generated for every request, hence requiring the
+    // response to reference it prevents replaying stale responses.
+    if !response.tags.event_ids().any(|id| id == request_id) {
+        return Err(Error::unrelated_response());
+    }
+
+    if let Some(pubkey) = response.tags.public_keys().next() {
+        if pubkey != uri_keys.public_key() {
+            return Err(Error::unrelated_response());
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use nostr::nips::nip47::{self, GetBalanceResponse, Method};
     use nostr_sdk::local_relay::MockRelay;
 
     use super::*;
+    use crate::error::ErrorKind;
 
     const RESPONSE: Response = Response {
         result_type: Method::GetBalance,
@@ -439,6 +468,49 @@ mod tests {
             balance: 0xDEADBEEF,
         })),
     };
+
+    #[test]
+    fn test_verify_response_correlation() {
+        let wallet_keys = Keys::generate();
+        let client_keys = Keys::generate();
+
+        let request_id: EventId = EventId::from_byte_array([0x11; 32]);
+        let other_request_id: EventId = EventId::from_byte_array([0x22; 32]);
+
+        let build_response = |e_tag: Option<EventId>, p_tag: Option<PublicKey>| {
+            let mut builder = EventBuilder::new(Kind::WalletConnectResponse, "");
+            if let Some(id) = e_tag {
+                builder = builder.tag(Tag::event(id));
+            }
+            if let Some(pubkey) = p_tag {
+                builder = builder.tag(Tag::public_key(pubkey));
+            }
+            builder.finalize(&wallet_keys).unwrap()
+        };
+
+        // Correlated response: accepted.
+        let response = build_response(Some(request_id), Some(client_keys.public_key()));
+        assert!(verify_response_correlation(&client_keys, &response, request_id).is_ok());
+
+        // Missing `p` tag: tolerated, wallets only SHOULD include it.
+        let response = build_response(Some(request_id), None);
+        assert!(verify_response_correlation(&client_keys, &response, request_id).is_ok());
+
+        // Missing `e` tag: rejected.
+        let response = build_response(None, Some(client_keys.public_key()));
+        let error = verify_response_correlation(&client_keys, &response, request_id).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::UnrelatedResponse);
+
+        // `e` tag referencing another request: rejected, i.e., a replayed old response.
+        let response = build_response(Some(other_request_id), Some(client_keys.public_key()));
+        let error = verify_response_correlation(&client_keys, &response, request_id).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::UnrelatedResponse);
+
+        // `p` tag addressing another client: rejected.
+        let response = build_response(Some(request_id), Some(wallet_keys.public_key()));
+        let error = verify_response_correlation(&client_keys, &response, request_id).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::UnrelatedResponse);
+    }
 
     fn create_keys(relay_url: RelayUrl) -> (Keys, Keys, NostrWalletConnectUri) {
         let wallet_keys = Keys::generate();
