@@ -27,6 +27,12 @@
 
 -->
 
+## Unreleased
+
+### Security
+
+- Verify the event ID before checking the verification cache, so tampered events aren't accepted as already verified
+
 ## v0.45.4 - 2026/09/19
 
 ### Fixed
