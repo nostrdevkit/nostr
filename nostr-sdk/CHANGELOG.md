@@ -70,6 +70,8 @@
 - Deprecate `LocalRelayBuilder::max_query_results` and `LocalRelayBuilder::default_filter_limit` (https://github.com/nostrdevkit/nostr/pull/1461)
 - Deprecate `Relay::fetch_events` and `Client::fetch_events`
 
+## v0.45.5 - 2026/11/02
+
 ### Security
 
 - Verify the event ID before checking the verification cache, so tampered events aren't accepted as already verified
