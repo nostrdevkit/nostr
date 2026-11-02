@@ -27,6 +27,12 @@
 
 -->
 
+## Unreleased
+
+### Security
+
+- Bind verification cache entries to the event signature, so an invalid signature can't bypass verification for a cached event ID.
+
 ## v0.45.5 - 2026/11/02
 
 ### Security
