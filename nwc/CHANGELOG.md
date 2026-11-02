@@ -27,6 +27,12 @@
 
 -->
 
+## Unreleased
+
+### Security
+
+- Verify that NIP-47 response events are correlated with the sent request
+
 ## v0.45.1 - 2026/09/11
 
 ### Fixed

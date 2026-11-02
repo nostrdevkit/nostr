@@ -13,6 +13,8 @@ opaquerr::define_kind! {
         Sdk => "SDK error",
         /// Wallet response was not received.
         NoResponse => "response not received",
+        /// Wallet response was not correlated with the sent request.
+        UnrelatedResponse => "unrelated wallet response",
         /// Anything not covered by the stable categories above.
         Other => "other error",
     }
@@ -32,5 +34,10 @@ impl Error {
     #[inline]
     pub(super) fn no_response() -> Self {
         Self::simple(ErrorKind::NoResponse)
+    }
+
+    #[inline]
+    pub(super) fn unrelated_response() -> Self {
+        Self::simple(ErrorKind::UnrelatedResponse)
     }
 }
