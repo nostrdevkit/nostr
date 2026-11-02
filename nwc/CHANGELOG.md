@@ -27,7 +27,7 @@
 
 -->
 
-## Unreleased
+## v0.45.2 - 2026/11/02
 
 ### Security
 
