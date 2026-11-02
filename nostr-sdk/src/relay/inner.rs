@@ -1640,7 +1640,7 @@ impl InnerRelay {
         }
 
         // Policies may make security-sensitive decisions from event identity and content.
-        self.state.verify_and_cache(&event).await?;
+        self.state.event_verifier().verify_and_cache(&event).await?;
 
         // Check event admission policy
         if let Some(policy) = &self.state.admit_policy {
@@ -2454,7 +2454,15 @@ mod tests {
 
         assert!(event.verify().is_err());
         for _ in 0..2 {
-            assert!(relay.inner.state.verify_and_cache(&event).await.is_err());
+            assert!(
+                relay
+                    .inner
+                    .state
+                    .event_verifier()
+                    .verify_and_cache(&event)
+                    .await
+                    .is_err()
+            );
         }
     }
 
