@@ -76,7 +76,7 @@ impl Error {
     }
 
     #[inline]
-    #[cfg(any(feature = "nip46", feature = "nip59"))]
+    #[cfg(any(feature = "nip46", feature = "nip49", feature = "nip59"))]
     pub(crate) fn crypto<E>(error: E) -> Self
     where
         E: Into<Box<dyn error::Error + Send + Sync>>,

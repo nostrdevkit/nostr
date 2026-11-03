@@ -27,6 +27,12 @@
 
 -->
 
+## Unreleased
+
+### Fixed
+
+- Fix building the `nip49` feature without `nip46` or `nip59` (https://github.com/nostrdevkit/nostr/pull/1511)
+
 ## v0.45.6 - 2026/10/30
 
 ### Security
