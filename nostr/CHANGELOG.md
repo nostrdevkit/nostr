@@ -43,13 +43,15 @@
 - Add NIP-47 BIP321 methods `pay` and `receive` (https://github.com/nostrdevkit/nostr/pull/1465)
 - Add `nip67::EoseHint` and `RelayMessage::eose_with_hints` for NIP-67 EOSE messages (https://github.com/nostrdevkit/nostr/pull/1501)
 
-### Fixed
-
-- Fix building the `nip49` feature without `nip46` or `nip59` (https://github.com/nostrdevkit/nostr/pull/1511)
-
 ### Security
 
 - Enforce max length for relay URLs in `RelayUrl::parse` (https://github.com/nostrdevkit/nostr/pull/1451)
+
+## v0.45.7 - 2026/11/05
+
+### Fixed
+
+- Fix building the `nip49` feature without `nip46` or `nip59` (https://github.com/nostrdevkit/nostr/pull/1511)
 
 ## v0.45.6 - 2026/10/30
 
