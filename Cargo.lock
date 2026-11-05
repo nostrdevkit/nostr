@@ -1748,7 +1748,7 @@ dependencies = [
 
 [[package]]
 name = "nostr"
-version = "0.45.6"
+version = "0.45.7"
 dependencies = [
  "aes",
  "base64",
