@@ -487,19 +487,17 @@ fn update_relay_per_user(
             "SELECT EXISTS(SELECT 1 FROM relays_per_user WHERE public_key_id = ?1 AND relay_id = ?2)",
             params![public_key_id, relay_id],
             |row| row.get(0),
-        )
-        .unwrap_or(false);
+        )?;
 
     if !exists {
-        let count: i64 = tx
-            .query_row(
-                "SELECT COUNT(*) FROM relays_per_user WHERE public_key_id = ?1",
-                params![public_key_id],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
+        let count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM relays_per_user WHERE public_key_id = ?1",
+            params![public_key_id],
+            |row| row.get(0),
+        )?;
 
-        if count >= MAX_RELAYS_PER_PK as i64 {
+        // Mirror in-memory backend: allow up to MAX_RELAYS_PER_PK + 1 distinct relays.
+        if count > MAX_RELAYS_PER_PK as i64 {
             return Ok(());
         }
     }
