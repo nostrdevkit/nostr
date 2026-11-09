@@ -21,7 +21,7 @@ use nostr_gossip::{
 };
 use rusqlite::{OptionalExtension, Transaction, params};
 
-use crate::constant::{READ_WRITE_FLAGS, RELAYS_QUERY_LIMIT, TTL_OUTDATED};
+use crate::constant::{MAX_RELAYS_PER_PK, READ_WRITE_FLAGS, RELAYS_QUERY_LIMIT, TTL_OUTDATED};
 use crate::error::StoreError;
 use crate::migration;
 use crate::model::ListRow;
@@ -478,6 +478,31 @@ fn update_relay_per_user(
     flags: GossipFlags,
 ) -> Result<(), StoreError> {
     let relay_id: i32 = get_or_save_relay_url(tx, relay_url)?;
+
+    // Cap the number of distinct relays per public key, mirroring the
+    // in-memory backend (MAX_RELAYS_PER_PK). Only update when the relay
+    // already exists for this key; otherwise skip once the cap is reached.
+    let exists: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM relays_per_user WHERE public_key_id = ?1 AND relay_id = ?2)",
+            params![public_key_id, relay_id],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+
+    if !exists {
+        let count: i64 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM relays_per_user WHERE public_key_id = ?1",
+                params![public_key_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        if count >= MAX_RELAYS_PER_PK as i64 {
+            return Ok(());
+        }
+    }
 
     let now: u64 = Timestamp::now().as_secs();
 
