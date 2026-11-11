@@ -15,4 +15,5 @@ pub(super) const READ_WRITE_FLAGS: GossipFlags = {
     flags
 };
 
+pub(super) const MAX_RELAYS_PER_PK: usize = 7;
 pub(super) const RELAYS_QUERY_LIMIT: u8 = 21;
