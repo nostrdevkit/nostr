@@ -482,12 +482,11 @@ fn update_relay_per_user(
     // Cap the number of distinct relays per public key, mirroring the
     // in-memory backend (MAX_RELAYS_PER_PK). Only update when the relay
     // already exists for this key; otherwise skip once the cap is reached.
-    let exists: bool = tx
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM relays_per_user WHERE public_key_id = ?1 AND relay_id = ?2)",
-            params![public_key_id, relay_id],
-            |row| row.get(0),
-        )?;
+    let exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM relays_per_user WHERE public_key_id = ?1 AND relay_id = ?2)",
+        params![public_key_id, relay_id],
+        |row| row.get(0),
+    )?;
 
     if !exists {
         let count: i64 = tx.query_row(
@@ -709,4 +708,108 @@ mod tests {
     }
 
     gossip_unit_tests!(NostrGossipSqliteUnitTest, setup);
+
+    /// Count the rows in `relays_per_user` for a single public key.
+    async fn relay_count(store: &NostrGossipSqliteUnitTest, public_key: PublicKey) -> i64 {
+        store
+            .pool
+            .interact(move |conn| {
+                conn.query_row(
+                    "SELECT COUNT(*)
+                     FROM relays_per_user rpu
+                     INNER JOIN public_keys pk ON rpu.public_key_id = pk.id
+                     WHERE pk.public_key = ?1",
+                    params![public_key.as_bytes().as_slice()],
+                    |row| row.get(0),
+                )
+                .map_err(StoreError::from)
+            })
+            .await
+            .unwrap()
+    }
+
+    async fn process_from(
+        store: &NostrGossipSqliteUnitTest,
+        keys: &Keys,
+        relay_url: &RelayUrl,
+        content: &str,
+    ) {
+        let event = EventBuilder::new(Kind::TextNote, content)
+            .finalize(keys)
+            .unwrap();
+
+        store.process(&event, Some(relay_url)).await.unwrap();
+    }
+
+    /// The SQLite backend must mirror the in-memory cap: at most
+    /// `MAX_RELAYS_PER_PK + 1` distinct relays are stored per public key.
+    /// Once a key is capped, new relays are skipped, but already-known relays
+    /// keep being updated.
+    #[tokio::test]
+    async fn test_relay_cap_per_public_key() {
+        let store: NostrGossipSqliteUnitTest = setup().await;
+
+        // The in-memory backend accepts a relay while
+        // `relays_len <= MAX_RELAYS_PER_PK`, so the limit is MAX + 1.
+        let max_relays: i64 = MAX_RELAYS_PER_PK as i64 + 1;
+
+        let keys = Keys::generate();
+        let public_key = keys.public_key();
+
+        // Fill the key up to the limit: every relay must be stored.
+        for i in 0..max_relays {
+            let relay_url = RelayUrl::parse(&format!("wss://relay-{i}.example.com")).unwrap();
+            process_from(&store, &keys, &relay_url, &format!("Fill {i}")).await;
+        }
+
+        assert_eq!(relay_count(&store, public_key).await, max_relays);
+
+        // Further distinct relays must be skipped.
+        for i in max_relays..(max_relays + 3) {
+            let relay_url = RelayUrl::parse(&format!("wss://relay-{i}.example.com")).unwrap();
+            process_from(&store, &keys, &relay_url, &format!("Overflow {i}")).await;
+        }
+
+        assert_eq!(relay_count(&store, public_key).await, max_relays);
+
+        // Existing relays must still be updated once the key is capped:
+        // the second event from the first relay increments `received_events`
+        // instead of being dropped by the cap.
+        let known_relay_url = RelayUrl::parse("wss://relay-0.example.com").unwrap();
+        process_from(&store, &keys, &known_relay_url, "Known relay").await;
+
+        let received_events: i64 = store
+            .pool
+            .interact(move |conn| {
+                conn.query_row(
+                    "SELECT rpu.received_events
+                     FROM relays_per_user rpu
+                     INNER JOIN public_keys pk ON rpu.public_key_id = pk.id
+                     INNER JOIN relays r ON rpu.relay_id = r.id
+                     WHERE pk.public_key = ?1 AND r.url = ?2",
+                    params![
+                        public_key.as_bytes().as_slice(),
+                        known_relay_url.as_str_without_trailing_slash()
+                    ],
+                    |row| row.get(0),
+                )
+                .map_err(StoreError::from)
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(received_events, 2);
+        assert_eq!(relay_count(&store, public_key).await, max_relays);
+
+        // The cap is per public key: a capped key must not starve other keys.
+        let other_keys = Keys::generate();
+        let other_public_key = other_keys.public_key();
+
+        for i in 0..max_relays {
+            let relay_url = RelayUrl::parse(&format!("wss://other-{i}.example.com")).unwrap();
+            process_from(&store, &other_keys, &relay_url, &format!("Other {i}")).await;
+        }
+
+        assert_eq!(relay_count(&store, other_public_key).await, max_relays);
+    }
 }
