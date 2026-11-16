@@ -379,16 +379,15 @@ async fn get_remote_signer_public_key(
 
                     // Check if it's a `connect` response.
                     //
-                    // Per NIP-46, for nostrconnect:// (client-initiated) connections the signer
-                    // sends a `connect` response whose `result` is the secret value from the URI
-                    // (not "ack"). The client MUST validate the returned secret to prevent
-                    // connection spoofing.
+                    // For nostrconnect:// the signer key is NOT known in advance, so the
+                    // response MUST echo the secret from the URI (NIP-46): an `ack` result
+                    // would allow any relay participant to be pinned as the remote signer.
                     if let Ok(NostrConnectResponse {
                         result: Some(result),
                         error: None,
                     }) = msg.to_response(NostrConnectMethod::Connect)
                     {
-                        if is_valid_connect_response(&result, Some(expected_secret)) {
+                        if is_valid_nostrconnect_response(&result, expected_secret) {
                             return Ok(event.pubkey);
                         } else {
                             tracing::warn!(
@@ -415,6 +414,20 @@ fn is_valid_connect_response(response: &ResponseResult, expected_secret: Option<
             Some(expected_secret) => s == expected_secret,
             None => false,
         },
+        _ => false,
+    }
+}
+
+/// Check that a `connect` response is valid for the client-initiated
+/// (`nostrconnect://`) flow.
+///
+/// Here the signer key is not known in advance, so the response MUST echo the
+/// secret from the URI: an `ack` result is not accepted, otherwise any relay
+/// participant could be pinned as the remote signer (connection spoofing).
+/// An `ack` reply is only valid for `bunker://` connections.
+fn is_valid_nostrconnect_response(response: &ResponseResult, expected_secret: &str) -> bool {
+    match &response {
+        ResponseResult::ConnectSecret(s) => s == expected_secret,
         _ => false,
     }
 }
@@ -526,6 +539,30 @@ mod tests {
         assert!(!is_valid_connect_response(
             &ResponseResult::ConnectSecret("secret".to_string()),
             None
+        ));
+    }
+
+    #[test]
+    fn test_is_valid_nostrconnect_response() {
+        // Only a response echoing the URI secret is valid.
+        assert!(is_valid_nostrconnect_response(
+            &ResponseResult::ConnectSecret("secret".to_string()),
+            "secret"
+        ));
+        assert!(!is_valid_nostrconnect_response(
+            &ResponseResult::ConnectSecret("other_secret".to_string()),
+            "secret"
+        ));
+
+        // An `ack` result must be rejected in the nostrconnect:// flow, otherwise
+        // any relay participant could be pinned as the remote signer.
+        assert!(!is_valid_nostrconnect_response(
+            &ResponseResult::Ack,
+            "secret"
+        ));
+        assert!(!is_valid_nostrconnect_response(
+            &ResponseResult::Error,
+            "secret"
         ));
     }
 }
