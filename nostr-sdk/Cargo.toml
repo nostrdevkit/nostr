@@ -27,7 +27,8 @@ local-relay = ["dep:nostr-memory", "tokio/net"]
 
 [dependencies]
 async-utility.workspace = true
-async-wsocket = { version = "0.17", features = ["socks"] }
+async-wsocket = { version = "0.18", features = ["socks"] }
+bytes = "1.12"
 faster-hex = { workspace = true, features = ["std"] }
 futures = "0.3"
 lru.workspace = true

@@ -303,7 +303,7 @@ impl RecordedConnection {
         let mut frames = Vec::new();
         while let Ok(msg) = self.sent.try_recv() {
             if let Message::Text(text) = msg {
-                frames.push(text);
+                frames.push(text.to_string());
             }
         }
         frames
@@ -311,7 +311,7 @@ impl RecordedConnection {
 
     pub(crate) fn reply(&self, msg: RelayMessage<'_>) {
         self.incoming
-            .unbounded_send(Ok(Message::Text(msg.as_json())))
+            .unbounded_send(Ok(Message::Text(msg.as_json().into())))
             .expect("relay dropped the connection");
     }
 

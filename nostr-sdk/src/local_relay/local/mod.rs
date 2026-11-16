@@ -235,12 +235,12 @@ mod tests {
 
         socket
             .send(Message::Text(
-                r#"["REQ","short-author",{"authors":["deadbeef"]}]"#.to_owned(),
+                r#"["REQ","short-author",{"authors":["deadbeef"]}]"#.into(),
             ))
             .await
             .unwrap();
         socket
-            .send(Message::Text(r#"["REQ","valid",{}]"#.to_owned()))
+            .send(Message::Text(r#"["REQ","valid",{}]"#.into()))
             .await
             .unwrap();
 
@@ -283,23 +283,19 @@ mod tests {
             .unwrap();
 
         socket
-            .send(Message::Text(
-                r#"["NEG-OPEN","neg-odd",{},"abc"]"#.to_owned(),
-            ))
+            .send(Message::Text(r#"["NEG-OPEN","neg-odd",{},"abc"]"#.into()))
             .await
             .unwrap();
         socket
-            .send(Message::Text(
-                r#"["NEG-OPEN","neg-nonhex",{},"zz"]"#.to_owned(),
-            ))
+            .send(Message::Text(r#"["NEG-OPEN","neg-nonhex",{},"zz"]"#.into()))
             .await
             .unwrap();
         socket
-            .send(Message::Text(r#"["NEG-MSG","neg-msg","abc"]"#.to_owned()))
+            .send(Message::Text(r#"["NEG-MSG","neg-msg","abc"]"#.into()))
             .await
             .unwrap();
         socket
-            .send(Message::Text(r#"["REQ","valid",{}]"#.to_owned()))
+            .send(Message::Text(r#"["REQ","valid",{}]"#.into()))
             .await
             .unwrap();
 
@@ -350,9 +346,9 @@ mod tests {
         let mut negentropy = Negentropy::owned(storage, 60_000).unwrap();
         let initial_message = faster_hex::hex_string(&negentropy.initiate().unwrap());
         socket
-            .send(Message::Text(format!(
-                r#"["NEG-OPEN","neg",{{}},"{initial_message}"]"#
-            )))
+            .send(Message::Text(
+                format!(r#"["NEG-OPEN","neg",{{}},"{initial_message}"]"#).into(),
+            ))
             .await
             .unwrap();
 
@@ -367,7 +363,7 @@ mod tests {
 
         // A malformed payload must terminate only this negentropy subscription
         socket
-            .send(Message::Text(r#"["NEG-MSG","neg","zz"]"#.to_owned()))
+            .send(Message::Text(r#"["NEG-MSG","neg","zz"]"#.into()))
             .await
             .unwrap();
 
@@ -386,7 +382,7 @@ mod tests {
 
         // The subscription is gone, but the connection keeps serving requests
         socket
-            .send(Message::Text(r#"["NEG-MSG","neg","6100"]"#.to_owned()))
+            .send(Message::Text(r#"["NEG-MSG","neg","6100"]"#.into()))
             .await
             .unwrap();
 
@@ -404,7 +400,7 @@ mod tests {
         ));
 
         socket
-            .send(Message::Text(r#"["REQ","valid",{}]"#.to_owned()))
+            .send(Message::Text(r#"["REQ","valid",{}]"#.into()))
             .await
             .unwrap();
 
@@ -431,7 +427,7 @@ mod tests {
             .await
             .unwrap();
         socket
-            .send(Message::Text(r#"["COUNT","count",{}]"#.to_owned()))
+            .send(Message::Text(r#"["COUNT","count",{}]"#.into()))
             .await
             .unwrap();
 
@@ -470,7 +466,7 @@ mod tests {
             .await
             .unwrap();
         socket
-            .send(Message::Text(r#"["NEG-OPEN","neg",{},""]"#.to_owned()))
+            .send(Message::Text(r#"["NEG-OPEN","neg",{},""]"#.into()))
             .await
             .unwrap();
 
@@ -507,7 +503,7 @@ mod tests {
             .await
             .unwrap();
         socket
-            .send(Message::Text(r#"["COUNT","count",{}]"#.to_owned()))
+            .send(Message::Text(r#"["COUNT","count",{}]"#.into()))
             .await
             .unwrap();
 
@@ -525,7 +521,7 @@ mod tests {
         ));
 
         socket
-            .send(Message::Text(r#"["NEG-OPEN","neg",{},""]"#.to_owned()))
+            .send(Message::Text(r#"["NEG-OPEN","neg",{},""]"#.into()))
             .await
             .unwrap();
 
@@ -555,7 +551,7 @@ mod tests {
             .await
             .unwrap();
         socket
-            .send(Message::Text(r#"["NEG-OPEN","neg",{},""]"#.to_owned()))
+            .send(Message::Text(r#"["NEG-OPEN","neg",{},""]"#.into()))
             .await
             .unwrap();
 
@@ -583,7 +579,7 @@ mod tests {
             .await
             .unwrap();
         socket
-            .send(Message::Text(r#"["NEG-OPEN","éé",{},""]"#.to_owned()))
+            .send(Message::Text(r#"["NEG-OPEN","éé",{},""]"#.into()))
             .await
             .unwrap();
 
@@ -623,7 +619,7 @@ mod tests {
             .await
             .unwrap();
         socket
-            .send(Message::Text(r#"["NEG-OPEN","neg",{},""]"#.to_owned()))
+            .send(Message::Text(r#"["NEG-OPEN","neg",{},""]"#.into()))
             .await
             .unwrap();
 
@@ -654,12 +650,12 @@ mod tests {
         time::timeout(Duration::from_secs(5), async {
             for _ in 0..301 {
                 socket
-                    .send(Message::Text(r#"["CLOSE","harmless"]"#.to_owned()))
+                    .send(Message::Text(r#"["CLOSE","harmless"]"#.into()))
                     .await
                     .unwrap();
             }
             socket
-                .send(Message::Text(r#"["REQ","valid",{}]"#.to_owned()))
+                .send(Message::Text(r#"["REQ","valid",{}]"#.into()))
                 .await
                 .unwrap();
 
@@ -691,7 +687,7 @@ mod tests {
         time::timeout(Duration::from_secs(5), async {
             for _ in 0..6_001 {
                 socket
-                    .send(Message::Text(r#"["CLOSE","harmless"]"#.to_owned()))
+                    .send(Message::Text(r#"["CLOSE","harmless"]"#.into()))
                     .await
                     .unwrap();
             }
@@ -718,7 +714,8 @@ mod tests {
 
         time::timeout(Duration::from_secs(5), async {
             for byte in 1..=3 {
-                socket.send(Message::Binary(vec![byte])).await.unwrap();
+                let bytes: Vec<u8> = vec![byte];
+                socket.send(Message::Binary(bytes.into())).await.unwrap();
                 let notice = socket.next().await.unwrap().unwrap();
                 assert!(matches!(
                     notice,
@@ -730,7 +727,8 @@ mod tests {
                 ));
             }
 
-            socket.send(Message::Binary(vec![4])).await.unwrap();
+            let bytes: &[u8] = &[4];
+            socket.send(Message::Binary(bytes.into())).await.unwrap();
             let closed = socket.next().await;
             assert!(matches!(
                 closed,

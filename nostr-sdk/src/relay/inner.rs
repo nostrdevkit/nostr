@@ -10,6 +10,8 @@ use std::{cmp, future, ptr};
 use async_utility::task::{self, JoinHandle};
 use async_utility::time;
 use async_wsocket::Message;
+#[cfg(not(target_arch = "wasm32"))]
+use bytes::Bytes;
 use futures::{self, SinkExt, StreamExt};
 use nostr::filter::MatchEventOptions;
 use nostr::message::MachineReadablePrefix;
@@ -1249,7 +1251,7 @@ impl InnerRelay {
                     tracing::debug!("Sending '{json}' to '{}' (size: {size} bytes)", self.url);
 
                     // Compose WebSocket text messages
-                    let msg: Message = Message::Text(json);
+                    let msg: Message = Message::Text(json.into());
 
                     // Send WebSocket messages
                     send_ws_msg(ws_tx, msg).await?;
@@ -1281,7 +1283,8 @@ impl InnerRelay {
                         ping.set_replied(false);
 
                         // Compose ping message
-                        let msg = Message::Ping(nonce.to_be_bytes().to_vec());
+                        let nonce_bytes: Bytes = Bytes::from(nonce.to_be_bytes().to_vec());
+                        let msg = Message::Ping(nonce_bytes);
 
                         // Send WebSocket message
                         send_ws_msg(ws_tx, msg).await?;
@@ -1317,7 +1320,7 @@ impl InnerRelay {
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 Message::Pong(bytes) if self.opts.ping && self.state.transport.support_ping() => {
-                    match bytes.try_into() {
+                    match bytes.as_ref().try_into() {
                         Ok(nonce) => {
                             // Nonce from big-endian bytes
                             let nonce: u64 = u64::from_be_bytes(nonce);

@@ -125,10 +125,11 @@ dependencies = [
 
 [[package]]
 name = "async-wsocket"
-version = "0.17.0"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c713e1f14c7b82e32ea159af1c6e2f070cfadbdf23fb2512acce9af0a26f1a2"
+checksum = "f56ae1ca45d338a67c81ce5fa0d8756fedb95d94f2d0bb99b05de12458bb673e"
 dependencies = [
+ "bytes",
  "futures",
  "futures-util",
  "js-sys",
@@ -138,6 +139,7 @@ dependencies = [
  "tokio-socks",
  "tokio-tungstenite",
  "url",
+ "utf8bytes",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -328,9 +330,9 @@ checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "bytes"
-version = "1.11.1"
+version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
+checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cbc"
@@ -1906,6 +1908,7 @@ dependencies = [
  "async-wsocket",
  "base64",
  "bitcoin_hashes 1.1.0",
+ "bytes",
  "faster-hex",
  "futures",
  "hyper",
@@ -3408,6 +3411,15 @@ name = "utf8_iter"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
+
+[[package]]
+name = "utf8bytes"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0272f8af8bcfe862654a317db63c318bb677a349b841ab68dd6976d0fe5cb113"
+dependencies = [
+ "bytes",
+]
 
 [[package]]
 name = "utf8parse"

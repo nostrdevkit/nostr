@@ -777,7 +777,7 @@ mod tests {
 
                 let stream = stream.filter_map(move |message| async move {
                     match message {
-                        Ok(Message::Text(text)) => match RelayMessage::from_json(&text) {
+                        Ok(Message::Text(text)) => match RelayMessage::from_json(text.as_str()) {
                             Ok(RelayMessage::EndOfStoredEvents {
                                 subscription_id: id,
                                 ..
@@ -787,7 +787,9 @@ mod tests {
                                     _ => "",
                                 };
                                 Some(Ok(Message::Text(
-                                    RelayMessage::closed(id.into_owned(), reason).as_json(),
+                                    RelayMessage::closed(id.into_owned(), reason)
+                                        .as_json()
+                                        .into(),
                                 )))
                             }
                             Ok(RelayMessage::Event { .. }) if response.is_missing_event() => None,
@@ -833,7 +835,7 @@ mod tests {
                     async move {
                         if let Ok(Message::Text(text)) = &message {
                             if matches!(
-                                RelayMessage::from_json(text),
+                                RelayMessage::from_json(text.as_str()),
                                 Ok(RelayMessage::EndOfStoredEvents { .. })
                             ) && !first_eose_seen.swap(true, Ordering::SeqCst)
                             {
