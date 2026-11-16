@@ -41,6 +41,8 @@
 - Add `NostrConnectBuilder` and `NostrConnect::builder`
 - Add `NostrConnect::client`
 
+## v0.45.3 - 2026/11/16
+
 ### Security
 
 - Reject ack responses in client-initiated flow
