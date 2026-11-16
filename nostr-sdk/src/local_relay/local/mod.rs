@@ -200,7 +200,8 @@ mod tests {
     async fn add_event_rejects_unverified_events() {
         let relay = LocalRelay::new();
         let keys = Keys::generate();
-        let mut event = EventBuilder::new(Kind::TextNote, "original")
+        let mut event = EventBuilder::new(Kind::TextNote)
+            .content("original")
             .finalize(&keys)
             .unwrap();
         event.content = String::from("forged");
@@ -213,7 +214,8 @@ mod tests {
     fn notify_event_rejects_unverified_events() {
         let relay = LocalRelay::new();
         let keys = Keys::generate();
-        let mut event = EventBuilder::new(Kind::TextNote, "original")
+        let mut event = EventBuilder::new(Kind::TextNote)
+            .content("original")
             .finalize(&keys)
             .unwrap();
         event.content = String::from("forged");
@@ -606,7 +608,8 @@ mod tests {
         for i in 0..3 {
             relay
                 .add_event(
-                    EventBuilder::new(Kind::TextNote, i.to_string())
+                    EventBuilder::new(Kind::TextNote)
+                        .content(i.to_string())
                         .finalize(&keys)
                         .unwrap(),
                 )

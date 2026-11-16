@@ -237,7 +237,7 @@ mod tests {
 
         // Event
         let kind = Kind::Custom(22_222); // Ephemeral kind
-        let event: Event = EventBuilder::new(kind, "").finalize(&keys).unwrap();
+        let event: Event = EventBuilder::new(kind).finalize(&keys).unwrap();
 
         let event_id: EventId = event.id;
 
@@ -362,7 +362,8 @@ mod tests {
         let local = setup_nip42_read_local_relay().await;
 
         let keys = Keys::generate();
-        let expected = EventBuilder::new(Kind::TextNote, "Test")
+        let expected = EventBuilder::new(Kind::TextNote)
+            .content("Test")
             .finalize(&keys)
             .unwrap();
         local.add_event(expected.clone()).await.unwrap();
@@ -387,7 +388,8 @@ mod tests {
         let local = setup_nip42_read_local_relay().await;
 
         let keys = Keys::generate();
-        let expected = EventBuilder::new(Kind::TextNote, "Test")
+        let expected = EventBuilder::new(Kind::TextNote)
+            .content("Test")
             .finalize(&keys)
             .unwrap();
         local.add_event(expected.clone()).await.unwrap();

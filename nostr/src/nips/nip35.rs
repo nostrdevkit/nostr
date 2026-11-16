@@ -74,6 +74,8 @@ impl IntoEventBuilder for Torrent {
             tags.push(Tag::hashtag(tag));
         }
 
-        EventBuilder::new(Kind::Torrent, self.description).tags(tags)
+        EventBuilder::new(Kind::Torrent)
+            .content(self.description)
+            .tags(tags)
     }
 }

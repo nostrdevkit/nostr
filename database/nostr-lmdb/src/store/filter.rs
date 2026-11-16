@@ -178,7 +178,8 @@ mod tests {
 
     fn create_test_event(content: &str) -> Event {
         let keys = Keys::generate();
-        EventBuilder::new(Kind::TextNote, content)
+        EventBuilder::new(Kind::TextNote)
+            .content(content)
             .finalize(&keys)
             .unwrap()
     }
@@ -205,7 +206,8 @@ mod tests {
     #[test]
     fn test_search_match_in_tags() {
         let keys = Keys::generate();
-        let event = EventBuilder::new(Kind::TextNote, "content")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("content")
             .tag(Tag::parse(["title", "Search userfacing tags"]).unwrap())
             .finalize(&keys)
             .unwrap();

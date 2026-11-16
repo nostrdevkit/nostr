@@ -478,7 +478,7 @@ mod tests {
         let other_request_id: EventId = EventId::from_byte_array([0x22; 32]);
 
         let build_response = |e_tag: Option<EventId>, p_tag: Option<PublicKey>| {
-            let mut builder = EventBuilder::new(Kind::WalletConnectResponse, "");
+            let mut builder = EventBuilder::new(Kind::WalletConnectResponse);
             if let Some(id) = e_tag {
                 builder = builder.tag(Tag::event(id));
             }
@@ -535,7 +535,7 @@ mod tests {
         client.add_relay(relay_url).and_connect().await.unwrap();
 
         if let Some(ciphers) = advertise_ciphers {
-            let event = EventBuilder::new(Kind::WalletConnectInfo, "")
+            let event = EventBuilder::new(Kind::WalletConnectInfo)
                 .tag(Nip47Tag::Encryption(ciphers))
                 .finalize(&wkeys)
                 .unwrap();
@@ -575,7 +575,8 @@ mod tests {
         let enc_response = cipher
             .encrypt(wkeys.secret_key(), &ckeys.public_key(), &RESPONSE.as_json())
             .unwrap();
-        let response_event = EventBuilder::new(Kind::WalletConnectResponse, enc_response)
+        let response_event = EventBuilder::new(Kind::WalletConnectResponse)
+            .content(enc_response)
             .tag(Tag::public_key(ckeys.public_key()))
             .tag(Tag::event(request.id))
             .finalize(&wkeys)

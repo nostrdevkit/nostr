@@ -55,7 +55,7 @@ impl IntoEventBuilder for RelayList {
             .to_tag()
         });
 
-        EventBuilder::new(Kind::RelayList, "").tags(tags)
+        EventBuilder::new(Kind::RelayList).tags(tags)
     }
 }
 

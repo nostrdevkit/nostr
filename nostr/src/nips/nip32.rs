@@ -35,7 +35,7 @@ impl Label {
 
 impl IntoEventBuilder for Label {
     fn into_event_builder(self) -> EventBuilder {
-        EventBuilder::new(Kind::Label, "").tags([
+        EventBuilder::new(Kind::Label).tags([
             Nip32Tag::LabelNamespace(self.namespace.clone()).to_tag(),
             Nip32Tag::Label {
                 value: self.value,

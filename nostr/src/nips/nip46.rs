@@ -1088,7 +1088,9 @@ where
 
 #[inline]
 fn make_event_builder(nip44_encrypted_content: String, receiver: PublicKey) -> EventBuilder {
-    EventBuilder::new(Kind::NostrConnect, nip44_encrypted_content).tag(receiver)
+    EventBuilder::new(Kind::NostrConnect)
+        .content(nip44_encrypted_content)
+        .tag(receiver)
 }
 
 impl FromStr for NostrConnectUri {

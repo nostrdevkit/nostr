@@ -247,7 +247,9 @@ impl FileMetadataEventBuilder {
 impl IntoEventBuilder for FileMetadataEventBuilder {
     fn into_event_builder(self) -> EventBuilder {
         let tags: Vec<Tag> = self.metadata.into();
-        EventBuilder::new(Kind::FileMetadata, self.description).tags(tags)
+        EventBuilder::new(Kind::FileMetadata)
+            .content(self.description)
+            .tags(tags)
     }
 }
 

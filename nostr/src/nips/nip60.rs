@@ -610,8 +610,9 @@ pub struct PreparedWalletEvent {
 
 #[cfg(all(feature = "std", feature = "os-rng"))]
 impl IntoEventBuilder for PreparedWalletEvent {
+    #[inline]
     fn into_event_builder(self) -> EventBuilder {
-        EventBuilder::new(Kind::CashuWallet, self.content)
+        EventBuilder::new(Kind::CashuWallet).content(self.content)
     }
 }
 
@@ -624,8 +625,9 @@ pub struct PreparedTokenEvent {
 
 #[cfg(all(feature = "std", feature = "os-rng"))]
 impl IntoEventBuilder for PreparedTokenEvent {
+    #[inline]
     fn into_event_builder(self) -> EventBuilder {
-        EventBuilder::new(Kind::CashuWalletUnspentProof, self.content)
+        EventBuilder::new(Kind::CashuWalletUnspentProof).content(self.content)
     }
 }
 
@@ -650,7 +652,9 @@ impl IntoEventBuilder for PreparedSpendingHistoryEvent {
                 ],
             )
         });
-        EventBuilder::new(Kind::CashuWalletSpendingHistory, self.content).tags(tags)
+        EventBuilder::new(Kind::CashuWalletSpendingHistory)
+            .content(self.content)
+            .tags(tags)
     }
 }
 
@@ -670,7 +674,9 @@ impl IntoEventBuilder for PreparedQuoteEvent {
             Tag::custom(MINT, [self.mint.as_str()]),
             Tag::expiration(expiration),
         ];
-        EventBuilder::new(Kind::CashuWalletQuote, self.content).tags(tags)
+        EventBuilder::new(Kind::CashuWalletQuote)
+            .content(self.content)
+            .tags(tags)
     }
 }
 
@@ -856,7 +862,8 @@ mod tests {
             .unwrap()
             .finalize(&wallet_keys)
             .unwrap();
-        event.sig = EventBuilder::new(Kind::TextNote, "invalid")
+        event.sig = EventBuilder::new(Kind::TextNote)
+            .content("invalid")
             .finalize(&Keys::generate())
             .unwrap()
             .sig;

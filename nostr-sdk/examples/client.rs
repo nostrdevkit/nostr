@@ -22,14 +22,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let keys = Keys::parse("nsec1ufnus6pju578ste3v90xd5m2decpuzpql2295m3sknqcjzyys9ls0qlc85")?;
 
     // Publish a text note
-    let event = EventBuilder::new(Kind::TextNote, "Hello world").finalize(&keys)?;
+    let event = EventBuilder::new(Kind::TextNote)
+        .content("Hello world")
+        .finalize(&keys)?;
     let output = client.send_event(&event).await?;
     println!("Event ID: {}", output.id().to_bech32()?);
     println!("Sent to: {:?}", output.success);
     println!("Not sent to: {:?}", output.failed);
 
     // Create a text note POW event to relays
-    let unsigned = EventBuilder::new(Kind::TextNote, "POW text note from rust-nostr")
+    let unsigned = EventBuilder::new(Kind::TextNote)
+        .content("POW text note from NostrDevKit")
         .finalize_unsigned(keys.public_key());
     let unsigned = unsigned
         .mine_async(&SingleThreadPow, NonZeroU8::new(20).unwrap())

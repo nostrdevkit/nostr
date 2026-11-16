@@ -1070,7 +1070,8 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_invalid_blob_report_before_request() {
-        let event = EventBuilder::new(Kind::TextNote, "not a report")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("not a report")
             .finalize(&Keys::generate())
             .unwrap();
         let client = BlossomClient::new(Url::parse("http://127.0.0.1:1").unwrap());

@@ -253,7 +253,8 @@ mod tests {
         failing.run().await.unwrap();
         let keys: Keys = Keys::generate();
         for index in 0..101 {
-            let event = EventBuilder::new(Kind::TextNote, format!("remote {index}"))
+            let event = EventBuilder::new(Kind::TextNote)
+                .content(format!("remote {index}"))
                 .finalize(&keys)
                 .unwrap();
             healthy.add_event(event.clone()).await.unwrap();

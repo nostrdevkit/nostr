@@ -33,6 +33,7 @@
 
 - Require `CryptoRng` trait for secret key generation (https://github.com/nostrdevkit/nostr/pull/1437)
 - Change `RelayMessage::EndOfStoredEvents(id)` to `RelayMessage::EndOfStoredEvents { subscription_id, hints }` (https://github.com/nostrdevkit/nostr/pull/1501)
+- Change `EventBuilder::new` signature
 
 ### Added
 

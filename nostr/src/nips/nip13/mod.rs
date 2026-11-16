@@ -588,11 +588,9 @@ pub mod tests {
             }
         }
 
-        let unsigned = EventBuilder::new(
-            Kind::TextNote,
-            "Why must I find leading zero bits? Is there no beauty in the ones?",
-        )
-        .finalize_unsigned(PublicKey::from_slice(&[0; 32]).unwrap());
+        let unsigned = EventBuilder::new(Kind::TextNote)
+            .content("Why must I find leading zero bits? Is there no beauty in the ones?")
+            .finalize_unsigned(PublicKey::from_slice(&[0; 32]).unwrap());
 
         let unsigned = unsigned
             .mine(&TestAdapter, NonZeroU8::new(2).unwrap())
@@ -634,11 +632,9 @@ pub mod tests {
             }
         }
 
-        let unsigned = EventBuilder::new(
-            Kind::TextNote,
-            "Why must I find leading zero bits? Is there no beauty in the ones?",
-        )
-        .finalize_unsigned(PublicKey::from_slice(&[0; 32]).unwrap());
+        let unsigned = EventBuilder::new(Kind::TextNote)
+            .content("Why must I find leading zero bits? Is there no beauty in the ones?")
+            .finalize_unsigned(PublicKey::from_slice(&[0; 32]).unwrap());
 
         let unsigned = unsigned
             .mine_async(&AsyncTestAdapter, NonZeroU8::new(2).unwrap())

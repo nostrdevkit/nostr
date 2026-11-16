@@ -214,7 +214,8 @@ impl<'a> CommentBuilder<'a> {
 
 impl IntoEventBuilder for CommentBuilder<'_> {
     fn into_event_builder(self) -> EventBuilder {
-        EventBuilder::new(Kind::Comment, self.content)
+        EventBuilder::new(Kind::Comment)
+            .content(self.content)
             .tags(
                 self.root
                     .map(|target| target.as_vec(true))

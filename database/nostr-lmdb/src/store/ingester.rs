@@ -403,7 +403,8 @@ mod tests {
         let keys = Keys::generate();
 
         // Create a mix of valid and duplicate events
-        let event1 = EventBuilder::new(Kind::TextNote, "Event 1")
+        let event1 = EventBuilder::new(Kind::TextNote)
+            .content("Event 1")
             .finalize(&keys)
             .expect("Failed to finalize event");
 
@@ -414,11 +415,13 @@ mod tests {
             .expect("Failed to save event");
 
         // Now try to save a batch with duplicate and new events
-        let event2 = EventBuilder::new(Kind::TextNote, "Event 2")
+        let event2 = EventBuilder::new(Kind::TextNote)
+            .content("Event 2")
             .finalize(&keys)
             .expect("Failed to finalize event");
 
-        let event3 = EventBuilder::new(Kind::TextNote, "Event 3")
+        let event3 = EventBuilder::new(Kind::TextNote)
+            .content("Event 3")
             .finalize(&keys)
             .expect("Failed to finalize event");
 
@@ -459,7 +462,8 @@ mod tests {
         // Create some events
         let mut events = Vec::new();
         for i in 0..10 {
-            let event = EventBuilder::new(Kind::TextNote, format!("Event to delete {}", i))
+            let event = EventBuilder::new(Kind::TextNote)
+                .content(format!("Event to delete {}", i))
                 .finalize(&keys)
                 .expect("Failed to finalize event");
             store
@@ -470,11 +474,13 @@ mod tests {
         }
 
         // Now create a mixed batch of saves and deletes
-        let new_event1 = EventBuilder::new(Kind::TextNote, "New event 1")
+        let new_event1 = EventBuilder::new(Kind::TextNote)
+            .content("New event 1")
             .finalize(&keys)
             .expect("Failed to finalize event");
 
-        let new_event2 = EventBuilder::new(Kind::TextNote, "New event 2")
+        let new_event2 = EventBuilder::new(Kind::TextNote)
+            .content("New event 2")
             .finalize(&keys)
             .expect("Failed to finalize event");
 

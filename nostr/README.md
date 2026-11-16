@@ -46,12 +46,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // New text note
     let event: Event =
-        EventBuilder::new(Kind::TextNote, "Hello from rust-nostr").finalize(&keys)?;
+        EventBuilder::new(Kind::TextNote).content("Hello from NostrDevKit").finalize(&keys)?;
 
     // New POW text note
     let difficulty: NonZeroU8 = NonZeroU8::new(16).unwrap();
     let unsigned: UnsignedEvent =
-        EventBuilder::new(Kind::TextNote, "POW text note from rust-nostr")
+        EventBuilder::new(Kind::TextNote).content("POW text note from NostrDevKit")
             .finalize_unsigned(keys.public_key());
     let unsigned: UnsignedEvent = unsigned.mine(&SingleThreadPow, difficulty)?;
     let event: Event = unsigned.finalize(&keys)?;

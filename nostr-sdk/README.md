@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     client.connect().await;
 
     // Publish a text note
-    let event = EventBuilder::new(Kind::TextNote, "My first text note from rust-nostr!")
+    let event = EventBuilder::new(Kind::TextNote).content("My first text note from rust-nostr!")
         .finalize(&keys)?;
     client.send_event(&event).await?;
 

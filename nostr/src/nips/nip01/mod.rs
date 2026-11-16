@@ -497,7 +497,7 @@ where
 impl IntoEventBuilder for &Metadata {
     #[inline]
     fn into_event_builder(self) -> EventBuilder {
-        EventBuilder::new(Kind::Metadata, self.as_json())
+        EventBuilder::new(Kind::Metadata).content(self.as_json())
     }
 }
 

@@ -65,7 +65,8 @@ mod tests {
             .unwrap();
 
         // Event with our target tag
-        let event = EventBuilder::new(Kind::TextNote, ":)")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content(":)")
             .tag(Tag::hashtag(UPDATE_TAG))
             .finalize(&keys)
             .unwrap();
@@ -73,7 +74,8 @@ mod tests {
 
         // This event has a random tag and should be filtered out in the REQ.
         // It would only appear if the filter had not been updated correctly.
-        let event = EventBuilder::new(Kind::TextNote, ":)")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content(":)")
             .tag(Tag::hashtag("TEST"))
             .finalize(&keys)
             .unwrap();
@@ -111,7 +113,8 @@ mod tests {
             .and_connect()
             .await
             .unwrap();
-        let event = EventBuilder::new(Kind::TextNote, ":)")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content(":)")
             .finalize(&keys)
             .unwrap();
         let output = client.send_event(&event).await.unwrap();
@@ -149,7 +152,8 @@ mod tests {
             output.failed.values().next().unwrap()
         );
 
-        let event = EventBuilder::new(Kind::GiftWrap, "Hey")
+        let event = EventBuilder::new(Kind::GiftWrap)
+            .content("Hey")
             .finalize(&keys)
             .unwrap();
         let output = client.send_event(&event).await.unwrap();
@@ -179,20 +183,21 @@ mod tests {
             .await
             .unwrap();
 
-        let base_event_size = EventBuilder::new(Kind::TextNote, "")
+        let base_event_size = EventBuilder::new(Kind::TextNote)
+            .content("")
             .finalize(&keys)
             .unwrap()
             .as_json()
             .len();
 
-        let equal_max_size =
-            EventBuilder::new(Kind::TextNote, ".".repeat(MAX_SIZE - base_event_size))
-                .finalize(&keys)
-                .unwrap();
-        let greater_max_size =
-            EventBuilder::new(Kind::TextNote, ".".repeat((MAX_SIZE - base_event_size) + 1))
-                .finalize(&keys)
-                .unwrap();
+        let equal_max_size = EventBuilder::new(Kind::TextNote)
+            .content(".".repeat(MAX_SIZE - base_event_size))
+            .finalize(&keys)
+            .unwrap();
+        let greater_max_size = EventBuilder::new(Kind::TextNote)
+            .content(".".repeat((MAX_SIZE - base_event_size) + 1))
+            .finalize(&keys)
+            .unwrap();
 
         let output = client.send_event(&equal_max_size).await.unwrap();
         dbg!(&output);
@@ -221,12 +226,14 @@ mod tests {
             .await
             .unwrap();
 
-        let event = EventBuilder::new(Kind::TextNote, "IDK")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("IDK")
             .tag(Tag::protected())
             .finalize(&keys)
             .unwrap();
 
-        let repost = EventBuilder::new(Kind::Repost, event.as_json())
+        let repost = EventBuilder::new(Kind::Repost)
+            .content(event.as_json())
             .tag(event.id)
             .tag(Tag::public_key(event.pubkey))
             .finalize(&Keys::generate())
@@ -260,14 +267,12 @@ mod tests {
         for i in 0..20 {
             client
                 .send_event(
-                    &EventBuilder::new(
-                        if i % 2 == 1 {
-                            Kind::TextNote
-                        } else {
-                            Kind::Comment
-                        },
-                        i.to_string(),
-                    )
+                    &EventBuilder::new(if i % 2 == 1 {
+                        Kind::TextNote
+                    } else {
+                        Kind::Comment
+                    })
+                    .content(i.to_string())
                     .finalize(&keys)
                     .unwrap(),
                 )

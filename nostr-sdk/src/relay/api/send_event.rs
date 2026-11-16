@@ -305,7 +305,8 @@ mod tests {
 
         // Make an event
         let keys = Keys::generate();
-        let event = EventBuilder::new(Kind::TextNote, "Test")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("Test")
             .finalize(&keys)
             .unwrap();
 
@@ -340,7 +341,8 @@ mod tests {
             .unwrap();
 
         let keys = Keys::generate();
-        let event = EventBuilder::new(Kind::TextNote, "Test")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("Test")
             .finalize(&keys)
             .unwrap();
         let output = relay.send_event(&event).wait_for_ok(false).await.unwrap();
@@ -367,7 +369,8 @@ mod tests {
 
         // Signer and event
         let keys = Keys::generate();
-        let event = EventBuilder::new(Kind::TextNote, "Test")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("Test")
             .finalize(&keys)
             .unwrap();
 
@@ -398,7 +401,8 @@ mod tests {
 
         relay.connect();
 
-        let event = EventBuilder::new(Kind::TextNote, "Test")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("Test")
             .finalize(&keys)
             .unwrap();
 

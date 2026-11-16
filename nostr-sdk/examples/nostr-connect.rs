@@ -27,7 +27,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     client.connect().await;
 
     // Publish events
-    let event = EventBuilder::new(Kind::TextNote, "Testing rust-nostr NIP46 signer [bunker]")
+    let event = EventBuilder::new(Kind::TextNote)
+        .content("Testing rust-nostr NIP46 signer [bunker]")
         .finalize_async(&signer)
         .await?;
     let output = client.send_event(&event).await?;

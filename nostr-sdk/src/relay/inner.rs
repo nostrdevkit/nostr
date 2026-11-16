@@ -2426,10 +2426,12 @@ mod tests {
 
     fn event_with_invalid_signature() -> Event {
         let keys = Keys::generate();
-        let mut event = EventBuilder::new(Kind::TextNote, "test")
+        let mut event = EventBuilder::new(Kind::TextNote)
+            .content("test")
             .finalize(&keys)
             .unwrap();
-        let other_event = EventBuilder::new(Kind::TextNote, "other")
+        let other_event = EventBuilder::new(Kind::TextNote)
+            .content("other")
             .finalize(&Keys::generate())
             .unwrap();
         event.sig = other_event.sig;
@@ -2514,7 +2516,8 @@ mod tests {
     #[tokio::test]
     async fn test_invalid_event_with_saved_id_is_rejected() {
         let relay = Relay::new(RelayUrl::parse("wss://relay.example.com").unwrap());
-        let valid_event = EventBuilder::new(Kind::TextNote, "valid")
+        let valid_event = EventBuilder::new(Kind::TextNote)
+            .content("valid")
             .finalize(&Keys::generate())
             .unwrap();
         relay
@@ -2539,7 +2542,8 @@ mod tests {
     #[tokio::test]
     async fn test_subscription_verification_accepts_event_matching_any_filter() {
         let keys = Keys::generate();
-        let event = EventBuilder::new(Kind::TextNote, "test")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("test")
             .finalize(&keys)
             .unwrap();
 
@@ -2732,7 +2736,8 @@ mod tests {
         relay: &Relay,
         subscription_id: &SubscriptionId,
     ) -> Result<(), Error> {
-        let event = EventBuilder::new(Kind::TextNote, "test")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("test")
             .finalize(&Keys::generate())
             .unwrap();
         relay
@@ -3084,7 +3089,8 @@ mod tests {
         }
         wait_for_eose(&mut notifications, &subscription).await;
 
-        let event: Event = EventBuilder::new(Kind::TextNote, "after reconnect")
+        let event: Event = EventBuilder::new(Kind::TextNote)
+            .content("after reconnect")
             .finalize(&keys)
             .unwrap();
         let event_id = event.id;
@@ -4029,7 +4035,8 @@ mod tests {
         flush_outbound(&relay).await;
 
         let mut notifications = relay.notifications();
-        let event = EventBuilder::new(Kind::TextNote, "stored event")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("stored event")
             .finalize(&Keys::generate())
             .unwrap();
         first.reply(RelayMessage::event(id.clone(), event));
@@ -4087,7 +4094,8 @@ mod tests {
         flush_outbound(&relay).await;
 
         let mut notifications: NotificationStream<RelayNotification> = relay.notifications();
-        let event: Event = EventBuilder::new(Kind::TextNote, "stored event")
+        let event: Event = EventBuilder::new(Kind::TextNote)
+            .content("stored event")
             .finalize(&Keys::generate())
             .unwrap();
         recorded.reply(RelayMessage::event(id.clone(), event));
@@ -4303,7 +4311,8 @@ mod tests {
         recorded.sent_text();
 
         let mut notifications: NotificationStream<RelayNotification> = relay.notifications();
-        let stored: Event = EventBuilder::new(Kind::TextNote, "stored event")
+        let stored: Event = EventBuilder::new(Kind::TextNote)
+            .content("stored event")
             .finalize(&Keys::generate())
             .unwrap();
         recorded.reply(RelayMessage::event(id.clone(), stored.clone()));

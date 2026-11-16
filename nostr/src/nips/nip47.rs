@@ -916,7 +916,8 @@ impl Request {
         };
 
         let keys: Keys = Keys::new(uri.secret.clone());
-        EventBuilder::new(Kind::WalletConnectRequest, encrypted)
+        EventBuilder::new(Kind::WalletConnectRequest)
+            .content(encrypted)
             .tag(uri.public_key)
             .tag_maybe(encryption_tag)
             .finalize(&keys)
@@ -2361,7 +2362,8 @@ mod tests {
             nip44::Version::V2,
         )
         .unwrap();
-        let response_event = EventBuilder::new(Kind::WalletConnectResponse, enc_response)
+        let response_event = EventBuilder::new(Kind::WalletConnectResponse)
+            .content(enc_response)
             .finalize(&wallet_keys)
             .unwrap();
         assert_eq!(
@@ -2375,7 +2377,8 @@ mod tests {
             response.as_json(),
         )
         .unwrap();
-        let response_event = EventBuilder::new(Kind::WalletConnectResponse, enc_response)
+        let response_event = EventBuilder::new(Kind::WalletConnectResponse)
+            .content(enc_response)
             .finalize(&wallet_keys)
             .unwrap();
         assert_eq!(
@@ -2415,7 +2418,8 @@ mod tests {
             nip44::Version::V2,
         )
         .unwrap();
-        let event = EventBuilder::new(Kind::WalletConnectResponse, encrypted)
+        let event = EventBuilder::new(Kind::WalletConnectResponse)
+            .content(encrypted)
             .finalize(&attacker_keys)
             .unwrap();
 
@@ -2446,10 +2450,12 @@ mod tests {
             nip44::Version::V2,
         )
         .unwrap();
-        let mut event = EventBuilder::new(Kind::WalletConnectNotificationNip44V2, encrypted)
+        let mut event = EventBuilder::new(Kind::WalletConnectNotificationNip44V2)
+            .content(encrypted)
             .finalize(&wallet_keys)
             .unwrap();
-        event.sig = EventBuilder::new(Kind::TextNote, "invalid")
+        event.sig = EventBuilder::new(Kind::TextNote)
+            .content("invalid")
             .finalize(&Keys::generate())
             .unwrap()
             .sig;
@@ -2484,10 +2490,10 @@ mod tests {
             nip44::Version::V2,
         )
         .unwrap();
-        let notification_event =
-            EventBuilder::new(Kind::WalletConnectNotificationNip44V2, enc_notification)
-                .finalize(&wallet_keys)
-                .unwrap();
+        let notification_event = EventBuilder::new(Kind::WalletConnectNotificationNip44V2)
+            .content(enc_notification)
+            .finalize(&wallet_keys)
+            .unwrap();
         assert_eq!(
             Notification::from_event(&uri, &notification_event).unwrap(),
             notification
@@ -2499,10 +2505,10 @@ mod tests {
             NOTIFICATION_JSON,
         )
         .unwrap();
-        let notification_event =
-            EventBuilder::new(Kind::WalletConnectNotification, enc_notification)
-                .finalize(&wallet_keys)
-                .unwrap();
+        let notification_event = EventBuilder::new(Kind::WalletConnectNotification)
+            .content(enc_notification)
+            .finalize(&wallet_keys)
+            .unwrap();
         assert_eq!(
             Notification::from_event(&uri, &notification_event).unwrap(),
             notification

@@ -126,7 +126,8 @@ mod tests {
     #[tokio::test]
     async fn verify_and_cache_rejects_invalid_signature() {
         let keys: Keys = Keys::generate();
-        let event: Event = EventBuilder::new(Kind::TextNote, "test")
+        let event: Event = EventBuilder::new(Kind::TextNote)
+            .content("test")
             .finalize(&keys)
             .unwrap();
         let mut invalid_event: Event = event.clone();
@@ -164,7 +165,8 @@ mod tests {
     #[tokio::test]
     async fn verify_and_cache_accepts_alternative_valid_signature() {
         let keys: Keys = Keys::generate();
-        let event: Event = EventBuilder::new(Kind::TextNote, "test")
+        let event: Event = EventBuilder::new(Kind::TextNote)
+            .content("test")
             .finalize(&keys)
             .unwrap();
         let mut alternative_event: Event = event.clone();

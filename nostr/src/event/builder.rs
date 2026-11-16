@@ -71,6 +71,7 @@ where
 }
 
 /// Event builder
+#[non_exhaustive]
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct EventBuilder {
     /// Event kind.
@@ -86,14 +87,11 @@ pub struct EventBuilder {
 impl EventBuilder {
     /// New event builder
     #[inline]
-    pub fn new<S>(kind: Kind, content: S) -> Self
-    where
-        S: Into<String>,
-    {
+    pub fn new(kind: Kind) -> Self {
         Self {
             kind,
             tags: Tags::new(),
-            content: content.into(),
+            content: String::new(),
             created_at: None,
         }
     }
@@ -129,6 +127,16 @@ impl EventBuilder {
         T: Into<Tag>,
     {
         self.tags.extend(tags.into_iter().map(Into::into));
+        self
+    }
+
+    /// Set content
+    #[inline]
+    pub fn content<T>(mut self, content: T) -> Self
+    where
+        T: Into<String>,
+    {
+        self.content = content.into();
         self
     }
 
@@ -208,7 +216,8 @@ mod tests {
                 .unwrap(),
         );
 
-        let event = EventBuilder::new(Kind::TextNote, "hello")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("hello")
             .finalize(&keys)
             .unwrap();
 
@@ -231,7 +240,12 @@ mod benches {
     pub fn builder_to_event(bh: &mut Bencher) {
         let keys = Keys::generate();
         bh.iter(|| {
-            black_box(EventBuilder::new(Kind::TextNote, "hello").finalize(&keys)).unwrap();
+            black_box(
+                EventBuilder::new(Kind::TextNote)
+                    .content("hello")
+                    .finalize(&keys),
+            )
+            .unwrap();
         });
     }
 }

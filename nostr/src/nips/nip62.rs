@@ -88,7 +88,9 @@ impl IntoEventBuilder for VanishRequest {
                 .collect(),
         };
 
-        EventBuilder::new(Kind::RequestToVanish, self.reason).tags(tags)
+        EventBuilder::new(Kind::RequestToVanish)
+            .content(self.reason)
+            .tags(tags)
     }
 }
 
@@ -225,10 +227,14 @@ mod tests {
             Some(&relay_b)
         ));
 
-        let other_kind = EventBuilder::new(Kind::TextNote, "hello").finalize_unsigned(
-            PublicKey::from_hex("79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+        let other_kind = EventBuilder::new(Kind::TextNote)
+            .content("hello")
+            .finalize_unsigned(
+                PublicKey::from_hex(
+                    "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+                )
                 .unwrap(),
-        );
+            );
 
         assert!(!is_valid_vanish_request_for_relay(
             other_kind.tags.as_slice(),

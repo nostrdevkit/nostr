@@ -47,7 +47,8 @@ impl Thread {
 
 impl IntoEventBuilder for Thread {
     fn into_event_builder(self) -> EventBuilder {
-        EventBuilder::new(Kind::Thread, self.content)
+        EventBuilder::new(Kind::Thread)
+            .content(self.content)
             .tag_maybe(self.title.map(|title| Nip7DTag::Title(title).to_tag()))
     }
 }
@@ -82,20 +83,22 @@ impl<'a> ThreadReply<'a> {
 
 impl IntoEventBuilder for ThreadReply<'_> {
     fn into_event_builder(self) -> EventBuilder {
-        EventBuilder::new(Kind::Comment, self.content).tags([
-            Nip22Tag::Event {
-                id: self.reply_to.id,
-                relay_hint: self.relay_hint,
-                public_key: Some(self.reply_to.pubkey),
-                uppercase: true,
-            }
-            .to_tag(),
-            Nip22Tag::Kind {
-                kind: Kind::Thread,
-                uppercase: true,
-            }
-            .to_tag(),
-        ])
+        EventBuilder::new(Kind::Comment)
+            .content(self.content)
+            .tags([
+                Nip22Tag::Event {
+                    id: self.reply_to.id,
+                    relay_hint: self.relay_hint,
+                    public_key: Some(self.reply_to.pubkey),
+                    uppercase: true,
+                }
+                .to_tag(),
+                Nip22Tag::Kind {
+                    kind: Kind::Thread,
+                    uppercase: true,
+                }
+                .to_tag(),
+            ])
     }
 }
 

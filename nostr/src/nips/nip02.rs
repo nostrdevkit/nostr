@@ -163,7 +163,7 @@ impl IntoEventBuilder for ContactListBuilder {
             }
             .to_tag()
         });
-        EventBuilder::new(Kind::ContactList, "").tags(tags)
+        EventBuilder::new(Kind::ContactList).tags(tags)
     }
 }
 

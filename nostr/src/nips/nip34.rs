@@ -453,7 +453,7 @@ impl IntoEventBuilder for GitRepositoryAnnouncement {
         }
 
         // Build
-        EventBuilder::new(Kind::GitRepoAnnouncement, "").tags(tags)
+        EventBuilder::new(Kind::GitRepoAnnouncement).tags(tags)
     }
 }
 
@@ -492,7 +492,9 @@ impl IntoEventBuilder for GitIssue {
         tags.extend(self.labels.into_iter().map(Tag::hashtag));
 
         // Build
-        EventBuilder::new(Kind::GitIssue, self.content).tags(tags)
+        EventBuilder::new(Kind::GitIssue)
+            .content(self.content)
+            .tags(tags)
     }
 }
 
@@ -622,7 +624,9 @@ impl IntoEventBuilder for GitPatch {
         tags.extend(self.labels.into_iter().map(Tag::hashtag));
 
         // Build
-        EventBuilder::new(Kind::GitPatch, content).tags(tags)
+        EventBuilder::new(Kind::GitPatch)
+            .content(content)
+            .tags(tags)
     }
 }
 
@@ -695,7 +699,9 @@ impl IntoEventBuilder for GitPullRequest {
         }
 
         // Build
-        EventBuilder::new(Kind::GitPullRequest, self.content).tags(tags)
+        EventBuilder::new(Kind::GitPullRequest)
+            .content(self.content)
+            .tags(tags)
     }
 }
 
@@ -762,7 +768,7 @@ impl IntoEventBuilder for GitPullRequestUpdate {
         }
 
         // Build
-        EventBuilder::new(Kind::GitPullRequestUpdate, "").tags(tags)
+        EventBuilder::new(Kind::GitPullRequestUpdate).tags(tags)
     }
 }
 
@@ -783,7 +789,7 @@ impl IntoEventBuilder for GitUserGraspList {
             .map(|url| Nip34Tag::Grasp(url).to_tag())
             .collect();
 
-        EventBuilder::new(Kind::GitUserGraspList, "").tags(tags)
+        EventBuilder::new(Kind::GitUserGraspList).tags(tags)
     }
 }
 

@@ -45,7 +45,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let content = connect.nip44_encrypt_async(&receiver, "Hi").await?;
     println!("Content: {content}");
 
-    let event = EventBuilder::new(Kind::TextNote, "Testing rust-nostr")
+    let event = EventBuilder::new(Kind::TextNote)
+        .content("Testing rust-nostr")
         .finalize_async(&connect)
         .await?;
     println!("Event: {}", event.as_json());

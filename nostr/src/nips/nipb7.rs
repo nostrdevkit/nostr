@@ -36,7 +36,7 @@ impl BlossomServerList {
 
 impl IntoEventBuilder for BlossomServerList {
     fn into_event_builder(self) -> EventBuilder {
-        EventBuilder::new(Kind::BlossomServerList, "")
+        EventBuilder::new(Kind::BlossomServerList)
             .tags(self.servers.into_iter().map(NipB7Tag::Server))
     }
 }

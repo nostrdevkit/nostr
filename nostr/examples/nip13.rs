@@ -10,11 +10,12 @@ fn main() -> Result<(), Error> {
     let keys = Keys::parse("6b911fd37cdf5c81d4c0adb1ab7fa822ed253ab0ad9aa18d77257c88b29b718e")?;
 
     let difficulty = NonZeroU8::new(20).unwrap(); // leading zero bits
-    let msg_content = "This is a Nostr message with embedded proof-of-work";
+    let content = "This is a Nostr message with embedded proof-of-work";
 
     // Build unsigned event
-    let unsigned: UnsignedEvent =
-        EventBuilder::new(Kind::TextNote, msg_content).finalize_unsigned(keys.public_key());
+    let unsigned: UnsignedEvent = EventBuilder::new(Kind::TextNote)
+        .content(content)
+        .finalize_unsigned(keys.public_key());
 
     #[cfg(not(feature = "pow-multi-thread"))]
     let adapter = SingleThreadPow;

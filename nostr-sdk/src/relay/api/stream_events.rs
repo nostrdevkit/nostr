@@ -241,7 +241,8 @@ mod tests {
     #[tokio::test]
     async fn test_stream_with_subscription_verification_single_filter() {
         let keys = Keys::generate();
-        let event = EventBuilder::new(Kind::TextNote, "test")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("test")
             .finalize(&keys)
             .unwrap();
 
@@ -276,7 +277,8 @@ mod tests {
     #[tokio::test]
     async fn test_stream_with_subscription_verification_multiple_filters() {
         let keys = Keys::generate();
-        let event = EventBuilder::new(Kind::TextNote, "test")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("test")
             .finalize(&keys)
             .unwrap();
 
@@ -315,7 +317,8 @@ mod tests {
         let local = setup_nip42_read_local_relay().await;
 
         let keys = Keys::generate();
-        let event = EventBuilder::new(Kind::TextNote, "Test")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("Test")
             .finalize(&keys)
             .unwrap();
         local.add_event(event.clone()).await.unwrap();
@@ -348,7 +351,8 @@ mod tests {
         let local = setup_nip42_read_local_relay().await;
 
         let keys = Keys::generate();
-        let expected = EventBuilder::new(Kind::TextNote, "Test")
+        let expected = EventBuilder::new(Kind::TextNote)
+            .content("Test")
             .finalize(&keys)
             .unwrap();
         local.add_event(expected.clone()).await.unwrap();
@@ -377,7 +381,8 @@ mod tests {
         let local = setup_nip42_read_local_relay().await;
 
         let keys = Keys::generate();
-        let expected = EventBuilder::new(Kind::TextNote, "Test")
+        let expected = EventBuilder::new(Kind::TextNote)
+            .content("Test")
             .finalize(&keys)
             .unwrap();
         local.add_event(expected.clone()).await.unwrap();

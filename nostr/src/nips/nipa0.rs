@@ -47,7 +47,8 @@ impl<'a> VoiceMessageReplyBuilder<'a> {
 
 impl IntoEventBuilder for VoiceMessageReplyBuilder<'_> {
     fn into_event_builder(self) -> EventBuilder {
-        EventBuilder::new(Kind::VoiceMessageReply, self.voice_url)
+        EventBuilder::new(Kind::VoiceMessageReply)
+            .content(self.voice_url)
             .tags(
                 self.root
                     .map(|target| target.as_vec(true))

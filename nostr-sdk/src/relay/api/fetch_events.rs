@@ -121,7 +121,8 @@ mod tests {
 
         // Send some events
         for i in 0..num_events {
-            let event = EventBuilder::new(Kind::TextNote, i.to_string())
+            let event = EventBuilder::new(Kind::TextNote)
+                .content(i.to_string())
                 .finalize(&keys)
                 .unwrap();
             relay.send_event(&event).await.unwrap();
@@ -176,7 +177,8 @@ mod tests {
         let local = setup_nip42_read_local_relay().await;
 
         let keys = Keys::generate();
-        let event = EventBuilder::new(Kind::TextNote, "Test")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("Test")
             .finalize(&keys)
             .unwrap();
         local.add_event(event.clone()).await.unwrap();
@@ -203,7 +205,8 @@ mod tests {
         let local = setup_nip42_read_local_relay().await;
 
         let keys = Keys::generate();
-        let expected = EventBuilder::new(Kind::TextNote, "Test")
+        let expected = EventBuilder::new(Kind::TextNote)
+            .content("Test")
             .finalize(&keys)
             .unwrap();
         local.add_event(expected.clone()).await.unwrap();
@@ -309,7 +312,8 @@ mod tests {
                 tokio::time::sleep(Duration::from_secs(2)).await;
 
                 // Build and send event
-                let event = EventBuilder::new(Kind::TextNote, "Additional")
+                let event = EventBuilder::new(Kind::TextNote)
+                    .content("Additional")
                     .finalize(&keys)
                     .unwrap();
                 r.send_event(&event).await.unwrap();
@@ -340,7 +344,8 @@ mod tests {
             // Send more events
             for _ in 0..2 {
                 // Build and send event
-                let event = EventBuilder::new(Kind::TextNote, "Additional")
+                let event = EventBuilder::new(Kind::TextNote)
+                    .content("Additional")
                     .finalize(&keys)
                     .unwrap();
                 r.send_event(&event).await.unwrap();

@@ -19,7 +19,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let keys = Keys::parse("nsec1ufnus6pju578ste3v90xd5m2decpuzpql2295m3sknqcjzyys9ls0qlc85")?;
 
     // Publish a text note
-    let event = EventBuilder::new(Kind::TextNote, "Hello world").finalize(&keys)?;
+    let event = EventBuilder::new(Kind::TextNote)
+        .content("Hello world")
+        .finalize(&keys)?;
     client.send_event(&event).await?;
 
     // Negentropy reconcile

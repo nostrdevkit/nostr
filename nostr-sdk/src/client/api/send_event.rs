@@ -467,7 +467,8 @@ mod tests {
     async fn unverified_event_is_rejected_before_sending() {
         let client = Client::default();
         let keys = Keys::generate();
-        let mut event = EventBuilder::new(Kind::TextNote, "original")
+        let mut event = EventBuilder::new(Kind::TextNote)
+            .content("original")
             .finalize(&keys)
             .unwrap();
         event.content = String::from("forged");
@@ -505,7 +506,8 @@ mod tests {
         client.connect().await;
 
         let keys = Keys::generate();
-        let event = EventBuilder::new(Kind::TextNote, "Broadcast test")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("Broadcast test")
             .finalize(&keys)
             .unwrap();
 
@@ -533,7 +535,8 @@ mod tests {
         client.connect().await;
 
         let keys = Keys::generate();
-        let event = EventBuilder::new(Kind::TextNote, "Targeted test")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("Targeted test")
             .finalize(&keys)
             .unwrap();
 
@@ -574,7 +577,8 @@ mod tests {
         client.connect().await;
 
         let keys = Keys::generate();
-        let event = EventBuilder::new(Kind::TextNote, "Force to all test")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("Force to all test")
             .finalize(&keys)
             .unwrap();
 
@@ -654,7 +658,8 @@ mod tests {
         // - Identify 'outbox_url' as the target
         // - Automatically connect to 'outbox_url'
         // - Send the event to the outbox and public relay
-        let event = EventBuilder::new(Kind::TextNote, "Gossip test")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("Gossip test")
             .finalize(&keys_a)
             .unwrap();
 
@@ -687,7 +692,8 @@ mod tests {
         client.connect().await;
 
         let keys = Keys::generate();
-        let event = EventBuilder::new(Kind::TextNote, "Broadcast test")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("Broadcast test")
             .finalize(&keys)
             .unwrap();
 
@@ -744,7 +750,8 @@ mod tests {
 
         // Sends an event to the inbox relay
         // NOTE: this is not a NIP-17 event, as the nip59 feature is required, so we are sending a fake gift wrap tagging the recipient
-        let event = EventBuilder::new(Kind::GiftWrap, "payload")
+        let event = EventBuilder::new(Kind::GiftWrap)
+            .content("payload")
             .tag(Tag::public_key(bob_keys.public_key()))
             .finalize(&Keys::generate())
             .unwrap();
@@ -774,7 +781,8 @@ mod tests {
 
         // NOTE: this is not a NIP-17 event, as the nip59 feature is required, so we are sending a fake gift wrap tagging the recipient
         let bob_keys = Keys::generate();
-        let event = EventBuilder::new(Kind::GiftWrap, "payload")
+        let event = EventBuilder::new(Kind::GiftWrap)
+            .content("payload")
             .tag(Tag::public_key(bob_keys.public_key()))
             .finalize(&Keys::generate())
             .unwrap();
@@ -813,7 +821,8 @@ mod tests {
             (&first, &first_keys, "first account"),
             (&second, &second_keys, "second account"),
         ] {
-            let event = EventBuilder::new(Kind::TextNote, content)
+            let event = EventBuilder::new(Kind::TextNote)
+                .content(content)
                 .tag(Tag::protected())
                 .finalize(keys)
                 .unwrap();
@@ -829,7 +838,8 @@ mod tests {
             assert!(output.success.get(&url).unwrap().is_ack());
         }
 
-        let unauthenticated_event = EventBuilder::new(Kind::TextNote, "no signer")
+        let unauthenticated_event = EventBuilder::new(Kind::TextNote)
+            .content("no signer")
             .tag(Tag::protected())
             .finalize(&Keys::generate())
             .unwrap();
@@ -852,7 +862,8 @@ mod tests {
             RelayStatus::Connected
         );
 
-        let event = EventBuilder::new(Kind::TextNote, "second account after reconnect")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("second account after reconnect")
             .tag(Tag::protected())
             .finalize(&second_keys)
             .unwrap();

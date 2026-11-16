@@ -238,7 +238,7 @@ impl HttpData {
 impl IntoEventBuilder for HttpData {
     fn into_event_builder(self) -> EventBuilder {
         let tags: Vec<Tag> = self.into();
-        EventBuilder::new(Kind::HttpAuth, "").tags(tags)
+        EventBuilder::new(Kind::HttpAuth).tags(tags)
     }
 }
 

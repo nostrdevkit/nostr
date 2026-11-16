@@ -1509,7 +1509,8 @@ mod tests {
 
     fn create_test_event(kind: u16, created_at: u64) -> Event {
         let keys = Keys::generate();
-        EventBuilder::new(Kind::from(kind), "test content")
+        EventBuilder::new(Kind::from(kind))
+            .content("test content")
             .custom_created_at(Timestamp::from_secs(created_at))
             .finalize(&keys)
             .unwrap()
@@ -1531,11 +1532,12 @@ mod tests {
             for deletion_first in [false, true] {
                 let dir = TempDir::new().unwrap();
                 let builder = NostrLmdbBuilder::new(dir.path());
-                let target = EventBuilder::new(kind, "target")
+                let target = EventBuilder::new(kind)
+                    .content("target")
                     .tags([Tag::identifier("test")])
                     .finalize(&keys)
                     .unwrap();
-                let deletion = EventBuilder::new(Kind::EventDeletion, "")
+                let deletion = EventBuilder::new(Kind::EventDeletion)
                     .tags([Tag::event(target.id)])
                     .finalize(&keys)
                     .unwrap();
@@ -1573,10 +1575,11 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let builder = NostrLmdbBuilder::new(dir.path());
         let keys = Keys::generate();
-        let target = EventBuilder::new(Kind::TextNote, "target")
+        let target = EventBuilder::new(Kind::TextNote)
+            .content("target")
             .finalize(&keys)
             .unwrap();
-        let deletion = EventBuilder::new(Kind::EventDeletion, "")
+        let deletion = EventBuilder::new(Kind::EventDeletion)
             .tags([Tag::event(target.id)])
             .finalize(&keys)
             .unwrap();
@@ -1612,13 +1615,14 @@ mod tests {
     fn test_foreign_id_deletion_cannot_poison_target() {
         let keys = Keys::generate();
         let stranger = Keys::generate();
-        let target = EventBuilder::new(Kind::TextNote, "target")
+        let target = EventBuilder::new(Kind::TextNote)
+            .content("target")
             .finalize(&keys)
             .unwrap();
         for deletion_first in [false, true] {
             let dir = TempDir::new().unwrap();
             let lmdb = Lmdb::from_builder(NostrLmdbBuilder::new(dir.path())).unwrap();
-            let deletion = EventBuilder::new(Kind::EventDeletion, "")
+            let deletion = EventBuilder::new(Kind::EventDeletion)
                 .tags([Tag::event(target.id)])
                 .finalize(&stranger)
                 .unwrap();
@@ -1645,17 +1649,19 @@ mod tests {
         for kind in [Kind::Metadata, Kind::Custom(30001)] {
             let dir = TempDir::new().unwrap();
             let lmdb = Lmdb::from_builder(NostrLmdbBuilder::new(dir.path())).unwrap();
-            let older = EventBuilder::new(kind, "live")
+            let older = EventBuilder::new(kind)
+                .content("live")
                 .tags([Tag::identifier("test")])
                 .custom_created_at(Timestamp::from_secs(10))
                 .finalize(&keys)
                 .unwrap();
-            let target = EventBuilder::new(kind, "deleted")
+            let target = EventBuilder::new(kind)
+                .content("deleted")
                 .tags([Tag::identifier("test")])
                 .custom_created_at(Timestamp::from_secs(20))
                 .finalize(&keys)
                 .unwrap();
-            let deletion = EventBuilder::new(Kind::EventDeletion, "")
+            let deletion = EventBuilder::new(Kind::EventDeletion)
                 .tags([Tag::event(target.id)])
                 .finalize(&keys)
                 .unwrap();
@@ -1676,7 +1682,8 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let lmdb = Lmdb::from_builder(NostrLmdbBuilder::new(dir.path())).unwrap();
         let keys = Keys::generate();
-        let target = EventBuilder::new(Kind::TextNote, "target")
+        let target = EventBuilder::new(Kind::TextNote)
+            .content("target")
             .finalize(&keys)
             .unwrap();
         for (kind, tag_name, tag_value) in [
@@ -1690,7 +1697,7 @@ mod tests {
                 format!("{}\0", target.id.to_hex()),
             ),
         ] {
-            let request = EventBuilder::new(kind, "")
+            let request = EventBuilder::new(kind)
                 .tags([Tag::parse([tag_name, tag_value.as_str()]).unwrap()])
                 .finalize(&keys)
                 .unwrap();
@@ -1705,10 +1712,11 @@ mod tests {
         let lmdb =
             Lmdb::from_builder(NostrLmdbBuilder::new(dir.path()).process_nip09(false)).unwrap();
         let keys = Keys::generate();
-        let target = EventBuilder::new(Kind::TextNote, "target")
+        let target = EventBuilder::new(Kind::TextNote)
+            .content("target")
             .finalize(&keys)
             .unwrap();
-        let deletion = EventBuilder::new(Kind::EventDeletion, "")
+        let deletion = EventBuilder::new(Kind::EventDeletion)
             .tags([Tag::event(target.id)])
             .finalize(&keys)
             .unwrap();
@@ -1727,13 +1735,15 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let lmdb = Lmdb::from_builder(NostrLmdbBuilder::new(dir.path())).unwrap();
         let keys = Keys::generate();
-        let known = EventBuilder::new(Kind::TextNote, "known")
+        let known = EventBuilder::new(Kind::TextNote)
+            .content("known")
             .finalize(&keys)
             .unwrap();
-        let unknown = EventBuilder::new(Kind::TextNote, "unknown")
+        let unknown = EventBuilder::new(Kind::TextNote)
+            .content("unknown")
             .finalize(&keys)
             .unwrap();
-        let deletion = EventBuilder::new(Kind::EventDeletion, "")
+        let deletion = EventBuilder::new(Kind::EventDeletion)
             .tags([Tag::event(known.id), Tag::event(unknown.id)])
             .finalize(&keys)
             .unwrap();
@@ -1770,7 +1780,8 @@ mod tests {
     fn test_multiple_deletion_authors_do_not_overwrite_each_other() {
         let keys = Keys::generate();
         let stranger = Keys::generate();
-        let target = EventBuilder::new(Kind::TextNote, "target")
+        let target = EventBuilder::new(Kind::TextNote)
+            .content("target")
             .finalize(&keys)
             .unwrap();
         for foreign_first in [false, true] {
@@ -1781,7 +1792,7 @@ mod tests {
                 false => [&keys, &stranger],
             };
             for author in authors {
-                let deletion = EventBuilder::new(Kind::EventDeletion, "")
+                let deletion = EventBuilder::new(Kind::EventDeletion)
                     .tags([Tag::event(target.id)])
                     .finalize(author)
                     .unwrap();
@@ -1800,13 +1811,16 @@ mod tests {
         let lmdb = Lmdb::from_builder(NostrLmdbBuilder::new(dir.path())).unwrap();
         let keys = Keys::generate();
         let stranger = Keys::generate();
-        let known = EventBuilder::new(Kind::TextNote, "known")
+        let known = EventBuilder::new(Kind::TextNote)
+            .content("known")
             .finalize(&keys)
             .unwrap();
-        let unknown = EventBuilder::new(Kind::TextNote, "unknown")
+        let unknown = EventBuilder::new(Kind::TextNote)
+            .content("unknown")
             .finalize(&keys)
             .unwrap();
-        let foreign = EventBuilder::new(Kind::TextNote, "foreign")
+        let foreign = EventBuilder::new(Kind::TextNote)
+            .content("foreign")
             .finalize(&stranger)
             .unwrap();
         assert_eq!(save_event(&lmdb, &known), SaveEventStatus::Success);
@@ -1816,7 +1830,7 @@ mod tests {
             Tag::event(foreign.id),
             Tag::parse(["a", &foreign_coordinate]).unwrap(),
         ] {
-            let deletion = EventBuilder::new(Kind::EventDeletion, "")
+            let deletion = EventBuilder::new(Kind::EventDeletion)
                 .tags([Tag::event(known.id), Tag::event(unknown.id), invalid_tag])
                 .finalize(&keys)
                 .unwrap();
@@ -1842,16 +1856,19 @@ mod tests {
         let builder = NostrLmdbBuilder::new(dir.path());
         let keys = Keys::generate();
         let stranger = Keys::generate();
-        let known = EventBuilder::new(Kind::TextNote, "known")
+        let known = EventBuilder::new(Kind::TextNote)
+            .content("known")
             .finalize(&keys)
             .unwrap();
-        let unknown = EventBuilder::new(Kind::TextNote, "unknown")
+        let unknown = EventBuilder::new(Kind::TextNote)
+            .content("unknown")
             .finalize(&keys)
             .unwrap();
-        let foreign = EventBuilder::new(Kind::TextNote, "foreign")
+        let foreign = EventBuilder::new(Kind::TextNote)
+            .content("foreign")
             .finalize(&stranger)
             .unwrap();
-        let deletion = EventBuilder::new(Kind::EventDeletion, "")
+        let deletion = EventBuilder::new(Kind::EventDeletion)
             .tags([
                 Tag::event(known.id),
                 Tag::event(unknown.id),

@@ -106,7 +106,9 @@ impl IntoEventBuilder for TextNoteReplyBuilder<'_> {
             }
         }
 
-        EventBuilder::new(Kind::TextNote, self.content).tags(tags)
+        EventBuilder::new(Kind::TextNote)
+            .content(self.content)
+            .tags(tags)
     }
 }
 
@@ -415,7 +417,8 @@ mod tests {
     #[cfg(all(feature = "std", feature = "os-rng"))]
     fn text_note_reply_builder() {
         let root_keys = Keys::generate();
-        let root = EventBuilder::new(Kind::TextNote, "root")
+        let root = EventBuilder::new(Kind::TextNote)
+            .content("root")
             .finalize(&root_keys)
             .unwrap();
 

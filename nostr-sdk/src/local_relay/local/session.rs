@@ -323,7 +323,8 @@ mod tests {
         let mut session = Nip42Session::default();
         let challenge = session.generate_challenge();
         let relay_url = RelayUrl::parse("ws://127.0.0.1:8080").unwrap();
-        let event = EventBuilder::new(Kind::TextNote, "unrelated")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("unrelated")
             .tag(Tag::custom("challenge", [challenge.as_str()]))
             .finalize(&keys)
             .unwrap();

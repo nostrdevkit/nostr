@@ -94,7 +94,7 @@ macro_rules! gossip_unit_tests {
             let relay_url = RelayUrl::parse("wss://hint.relay.io").unwrap();
 
             let keys = Keys::generate();
-            let event = EventBuilder::new(Kind::TextNote, "test")
+            let event = EventBuilder::new(Kind::TextNote).content("test")
                 .tag(Tag::from(
                     Nip01Tag::PublicKey {
                         public_key,
@@ -127,7 +127,7 @@ macro_rules! gossip_unit_tests {
 
             // Process multiple events from the same relay
             for i in 0..5 {
-                let event = EventBuilder::new(Kind::TextNote, format!("Test {i}"))
+                let event = EventBuilder::new(Kind::TextNote).content(format!("Test {i}"))
                     .finalize(&keys)
                     .unwrap();
 

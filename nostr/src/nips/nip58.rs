@@ -103,7 +103,7 @@ impl IntoEventBuilder for BadgeDefinition {
                 .into_iter()
                 .map(|(url, dimensions)| Nip58Tag::Thumb(url, dimensions).to_tag()),
         );
-        EventBuilder::new(Kind::BadgeDefinition, "").tags(tags)
+        EventBuilder::new(Kind::BadgeDefinition).tags(tags)
     }
 }
 
@@ -138,7 +138,7 @@ impl IntoEventBuilder for BadgeAward {
     fn into_event_builder(self) -> EventBuilder {
         let tags = core::iter::once(Tag::coordinate(self.badge_definition, None))
             .chain(self.awarded_public_keys.into_iter().map(Tag::public_key));
-        EventBuilder::new(Kind::BadgeAward, "").tags(tags)
+        EventBuilder::new(Kind::BadgeAward).tags(tags)
     }
 }
 
@@ -273,7 +273,7 @@ impl IntoEventBuilder for ProfileBadges {
                 .to_tag(),
             ]
         });
-        EventBuilder::new(Kind::ProfileBadges, "").tags(tags)
+        EventBuilder::new(Kind::ProfileBadges).tags(tags)
     }
 }
 

@@ -131,7 +131,8 @@ mod tests {
         let local = setup_nip42_read_local_relay().await;
 
         let keys = Keys::generate();
-        let event = EventBuilder::new(Kind::TextNote, "Test")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("Test")
             .finalize(&keys)
             .unwrap();
         local.add_event(event).await.unwrap();
@@ -156,7 +157,8 @@ mod tests {
         let local = setup_nip42_read_local_relay().await;
 
         let keys = Keys::generate();
-        let expected = EventBuilder::new(Kind::TextNote, "Test")
+        let expected = EventBuilder::new(Kind::TextNote)
+            .content("Test")
             .finalize(&keys)
             .unwrap();
         local.add_event(expected.clone()).await.unwrap();

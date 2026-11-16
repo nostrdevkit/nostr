@@ -507,10 +507,12 @@ impl IntoEventBuilder for LiveEventMessageBuilder {
     fn into_event_builder(self) -> EventBuilder {
         let coordinate =
             Coordinate::new(Kind::LiveEvent, self.live_event_host).identifier(self.live_event_id);
-        EventBuilder::new(Kind::LiveEventMessage, self.content).tag(Nip01Tag::Coordinate {
-            coordinate,
-            relay_hint: self.relay_hint,
-        })
+        EventBuilder::new(Kind::LiveEventMessage)
+            .content(self.content)
+            .tag(Nip01Tag::Coordinate {
+                coordinate,
+                relay_hint: self.relay_hint,
+            })
     }
 }
 
@@ -625,7 +627,7 @@ impl LiveEvent {
 impl IntoEventBuilder for LiveEvent {
     fn into_event_builder(self) -> EventBuilder {
         let tags: Vec<Tag> = self.into();
-        EventBuilder::new(Kind::LiveEvent, "").tags(tags)
+        EventBuilder::new(Kind::LiveEvent).tags(tags)
     }
 }
 

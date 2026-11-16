@@ -214,7 +214,7 @@ impl IntoEventBuilder for Poll {
             tags.push(Nip88Tag::PollEndsAt(timestamp).to_tag());
         }
 
-        EventBuilder::new(Kind::Poll, self.title).tags(tags)
+        EventBuilder::new(Kind::Poll).content(self.title).tags(tags)
     }
 }
 
@@ -258,7 +258,7 @@ impl IntoEventBuilder for PollResponse {
             }
         };
 
-        EventBuilder::new(Kind::PollResponse, "").tags(tags)
+        EventBuilder::new(Kind::PollResponse).tags(tags)
     }
 }
 

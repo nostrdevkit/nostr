@@ -145,7 +145,9 @@ impl IntoEventBuilder for WebBookmark {
             tags.push(NipB0Tag::Hashtag(hashtag).into());
         }
 
-        EventBuilder::new(Kind::WebBookmark, self.description).tags(tags)
+        EventBuilder::new(Kind::WebBookmark)
+            .content(self.description)
+            .tags(tags)
     }
 }
 

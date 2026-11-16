@@ -125,7 +125,7 @@ impl From<MuteList> for Vec<Tag> {
 impl IntoEventBuilder for MuteList {
     fn into_event_builder(self) -> EventBuilder {
         let tags: Vec<Tag> = self.into();
-        EventBuilder::new(Kind::MuteList, "").tags(tags)
+        EventBuilder::new(Kind::MuteList).tags(tags)
     }
 }
 
@@ -157,7 +157,7 @@ impl From<Bookmarks> for Vec<Tag> {
 impl IntoEventBuilder for Bookmarks {
     fn into_event_builder(self) -> EventBuilder {
         let tags: Vec<Tag> = self.into();
-        EventBuilder::new(Kind::Bookmarks, "").tags(tags)
+        EventBuilder::new(Kind::Bookmarks).tags(tags)
     }
 }
 
@@ -189,7 +189,7 @@ impl From<Interests> for Vec<Tag> {
 impl IntoEventBuilder for Interests {
     fn into_event_builder(self) -> EventBuilder {
         let tags: Vec<Tag> = self.into();
-        EventBuilder::new(Kind::Interests, "").tags(tags)
+        EventBuilder::new(Kind::Interests).tags(tags)
     }
 }
 
@@ -223,7 +223,7 @@ impl From<Emojis> for Vec<Tag> {
 impl IntoEventBuilder for Emojis {
     fn into_event_builder(self) -> EventBuilder {
         let tags: Vec<Tag> = self.into();
-        EventBuilder::new(Kind::Emojis, "").tags(tags)
+        EventBuilder::new(Kind::Emojis).tags(tags)
     }
 }
 
@@ -272,7 +272,7 @@ impl PinnedNotes {
 
 impl IntoEventBuilder for PinnedNotes {
     fn into_event_builder(self) -> EventBuilder {
-        EventBuilder::new(Kind::PinList, "").tags(self.event_ids.into_iter().map(Tag::event))
+        EventBuilder::new(Kind::PinList).tags(self.event_ids.into_iter().map(Tag::event))
     }
 }
 
@@ -296,7 +296,7 @@ impl Communities {
 
 impl IntoEventBuilder for Communities {
     fn into_event_builder(self) -> EventBuilder {
-        EventBuilder::new(Kind::Communities, "").tags(self.coordinates.into_iter().map(Tag::from))
+        EventBuilder::new(Kind::Communities).tags(self.coordinates.into_iter().map(Tag::from))
     }
 }
 
@@ -320,7 +320,7 @@ impl PublicChats {
 
 impl IntoEventBuilder for PublicChats {
     fn into_event_builder(self) -> EventBuilder {
-        EventBuilder::new(Kind::PublicChats, "").tags(self.event_ids.into_iter().map(Tag::event))
+        EventBuilder::new(Kind::PublicChats).tags(self.event_ids.into_iter().map(Tag::event))
     }
 }
 
@@ -344,8 +344,7 @@ impl BlockedRelays {
 
 impl IntoEventBuilder for BlockedRelays {
     fn into_event_builder(self) -> EventBuilder {
-        EventBuilder::new(Kind::BlockedRelays, "")
-            .tags(self.relays.into_iter().map(Nip51Tag::Relay))
+        EventBuilder::new(Kind::BlockedRelays).tags(self.relays.into_iter().map(Nip51Tag::Relay))
     }
 }
 
@@ -369,7 +368,7 @@ impl SearchRelays {
 
 impl IntoEventBuilder for SearchRelays {
     fn into_event_builder(self) -> EventBuilder {
-        EventBuilder::new(Kind::SearchRelays, "").tags(self.relays.into_iter().map(Nip51Tag::Relay))
+        EventBuilder::new(Kind::SearchRelays).tags(self.relays.into_iter().map(Nip51Tag::Relay))
     }
 }
 
@@ -398,7 +397,7 @@ impl IntoEventBuilder for FollowSet {
     fn into_event_builder(self) -> EventBuilder {
         let tags = core::iter::once(Tag::identifier(self.identifier))
             .chain(self.public_keys.into_iter().map(Tag::public_key));
-        EventBuilder::new(Kind::FollowSet, "").tags(tags)
+        EventBuilder::new(Kind::FollowSet).tags(tags)
     }
 }
 
@@ -427,7 +426,7 @@ impl IntoEventBuilder for RelaySet {
     fn into_event_builder(self) -> EventBuilder {
         let tags = core::iter::once(Tag::identifier(self.identifier))
             .chain(self.relays.into_iter().map(Nip51Tag::Relay).map(Into::into));
-        EventBuilder::new(Kind::RelaySet, "").tags(tags)
+        EventBuilder::new(Kind::RelaySet).tags(tags)
     }
 }
 
@@ -455,7 +454,7 @@ impl IntoEventBuilder for BookmarkSet {
     fn into_event_builder(self) -> EventBuilder {
         let mut tags: Vec<Tag> = self.bookmarks.into();
         tags.push(Tag::identifier(self.identifier));
-        EventBuilder::new(Kind::BookmarkSet, "").tags(tags)
+        EventBuilder::new(Kind::BookmarkSet).tags(tags)
     }
 }
 
@@ -483,7 +482,7 @@ impl IntoEventBuilder for ArticlesCurationSet {
     fn into_event_builder(self) -> EventBuilder {
         let mut tags: Vec<Tag> = self.articles.into();
         tags.push(Tag::identifier(self.identifier));
-        EventBuilder::new(Kind::ArticlesCurationSet, "").tags(tags)
+        EventBuilder::new(Kind::ArticlesCurationSet).tags(tags)
     }
 }
 
@@ -515,7 +514,7 @@ impl IntoEventBuilder for VideosCurationSet {
                 .into_iter()
                 .map(|video| Tag::coordinate(video, None)),
         );
-        EventBuilder::new(Kind::VideosCurationSet, "").tags(tags)
+        EventBuilder::new(Kind::VideosCurationSet).tags(tags)
     }
 }
 
@@ -545,7 +544,7 @@ impl IntoEventBuilder for InterestSet {
     fn into_event_builder(self) -> EventBuilder {
         let tags = core::iter::once(Tag::identifier(self.identifier))
             .chain(self.hashtags.into_iter().map(Tag::hashtag));
-        EventBuilder::new(Kind::InterestSet, "").tags(tags)
+        EventBuilder::new(Kind::InterestSet).tags(tags)
     }
 }
 
@@ -582,7 +581,7 @@ impl IntoEventBuilder for EmojiSet {
                 .to_tag()
             }),
         );
-        EventBuilder::new(Kind::EmojiSet, "").tags(tags)
+        EventBuilder::new(Kind::EmojiSet).tags(tags)
     }
 }
 

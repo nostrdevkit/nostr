@@ -23,7 +23,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     client.connect().and_wait(Duration::from_secs(10)).await;
 
     // Publish a text note
-    let event = EventBuilder::new(Kind::TextNote, "Hello world").finalize(&keys)?;
+    let event = EventBuilder::new(Kind::TextNote)
+        .content("Hello world")
+        .finalize(&keys)?;
     let output = client.send_event(&event).await?;
     println!("Event ID: {}", output.id().to_bech32()?);
     println!("Sent to: {:?}", output.success);

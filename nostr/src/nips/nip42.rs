@@ -38,7 +38,7 @@ impl ClientAuthentication {
 
 impl IntoEventBuilder for ClientAuthentication {
     fn into_event_builder(self) -> EventBuilder {
-        EventBuilder::new(Kind::Authentication, "").tags([
+        EventBuilder::new(Kind::Authentication).tags([
             Nip42Tag::Challenge(self.challenge),
             Nip42Tag::Relay(self.relay),
         ])
@@ -182,7 +182,8 @@ mod tests {
         assert!(!is_valid_auth_event(&event, &relay_url, challenge));
 
         // Wrong kind
-        let event = EventBuilder::new(Kind::TextNote, "abcd")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("abcd")
             .finalize(&keys)
             .unwrap();
         assert!(!is_valid_auth_event(&event, &relay_url, challenge));

@@ -56,11 +56,13 @@ impl ChatMessageReply {
 
 impl IntoEventBuilder for ChatMessageReply {
     fn into_event_builder(self) -> EventBuilder {
-        EventBuilder::new(Kind::ChatMessage, self.content).tag(Nip18Tag::Quote {
-            id: self.reply_to,
-            relay_hint: self.relay_hint,
-            public_key: Some(self.reply_to_author),
-        })
+        EventBuilder::new(Kind::ChatMessage)
+            .content(self.content)
+            .tag(Nip18Tag::Quote {
+                id: self.reply_to,
+                relay_hint: self.relay_hint,
+                public_key: Some(self.reply_to_author),
+            })
     }
 }
 
@@ -84,7 +86,8 @@ mod tests {
 
     #[test]
     fn chat_reply_adds_event_uri_once() {
-        let target = EventBuilder::new(Kind::ChatMessage, "target")
+        let target = EventBuilder::new(Kind::ChatMessage)
+            .content("target")
             .finalize(&Keys::generate())
             .unwrap();
 

@@ -916,7 +916,8 @@ mod tests {
         let local = LocalRelay::new();
         local.run().await.unwrap();
 
-        let event = EventBuilder::new(Kind::TextNote, "explicit download")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("explicit download")
             .finalize(&Keys::generate())
             .unwrap();
         local.add_event(event.clone()).await.unwrap();
@@ -984,13 +985,16 @@ mod tests {
 
         // Build events to store in the local database
         let local_events = [
-            EventBuilder::new(Kind::TextNote, "Local 1")
+            EventBuilder::new(Kind::TextNote)
+                .content("Local 1")
                 .finalize(&Keys::generate())
                 .unwrap(),
-            EventBuilder::new(Kind::TextNote, "Local 2")
+            EventBuilder::new(Kind::TextNote)
+                .content("Local 2")
                 .finalize(&Keys::generate())
                 .unwrap(),
-            EventBuilder::new(Kind::Custom(123), "Local 123")
+            EventBuilder::new(Kind::Custom(123))
+                .content("Local 123")
                 .finalize(&Keys::generate())
                 .unwrap(),
         ];
@@ -1015,13 +1019,16 @@ mod tests {
         let relays_events = [
             // Event in common with the local database
             local_events[0].clone(),
-            EventBuilder::new(Kind::TextNote, "Test 2")
+            EventBuilder::new(Kind::TextNote)
+                .content("Test 2")
                 .finalize(&Keys::generate())
                 .unwrap(),
-            EventBuilder::new(Kind::TextNote, "Test 3")
+            EventBuilder::new(Kind::TextNote)
+                .content("Test 3")
                 .finalize(&Keys::generate())
                 .unwrap(),
-            EventBuilder::new(Kind::Custom(123), "Test 4")
+            EventBuilder::new(Kind::Custom(123))
+                .content("Test 4")
                 .finalize(&Keys::generate())
                 .unwrap(),
         ];
@@ -1095,7 +1102,8 @@ mod tests {
         let url = local.url().await;
 
         let keys = Keys::generate();
-        let event = EventBuilder::new(Kind::TextNote, "download")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("download")
             .finalize(&keys)
             .unwrap();
 
@@ -1137,7 +1145,8 @@ mod tests {
 
         release_download.notify_one();
 
-        let unrelated_event = EventBuilder::new(Kind::Metadata, "{}")
+        let unrelated_event = EventBuilder::new(Kind::Metadata)
+            .content("{}")
             .finalize(&keys)
             .unwrap();
 
@@ -1177,7 +1186,8 @@ mod tests {
 
         let keys = Keys::generate();
         for index in 0..event_count {
-            let event = EventBuilder::new(Kind::TextNote, format!("remote {index}"))
+            let event = EventBuilder::new(Kind::TextNote)
+                .content(format!("remote {index}"))
                 .finalize(&keys)
                 .unwrap();
             local.add_event(event).await.unwrap();
@@ -1287,7 +1297,8 @@ mod tests {
 
         let keys = Keys::generate();
         for index in 0..event_count {
-            let event = EventBuilder::new(Kind::TextNote, format!("remote {index}"))
+            let event = EventBuilder::new(Kind::TextNote)
+                .content(format!("remote {index}"))
                 .finalize(&keys)
                 .unwrap();
             local.add_event(event).await.unwrap();

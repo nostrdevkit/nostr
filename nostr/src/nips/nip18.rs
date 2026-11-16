@@ -60,7 +60,7 @@ impl IntoEventBuilder for RepostBuilder<'_> {
         };
 
         if self.event.kind == Kind::TextNote {
-            EventBuilder::new(Kind::Repost, content).tags([
+            EventBuilder::new(Kind::Repost).content(content).tags([
                 Nip18Tag::Event {
                     id: self.event.id,
                     relay_hint: self.relay_url,
@@ -73,7 +73,8 @@ impl IntoEventBuilder for RepostBuilder<'_> {
                 .to_tag(),
             ])
         } else {
-            EventBuilder::new(Kind::GenericRepost, content)
+            EventBuilder::new(Kind::GenericRepost)
+                .content(content)
                 .tag_maybe(
                     self.event
                         .coordinate()
@@ -396,7 +397,8 @@ mod tests {
 
     #[test]
     fn text_note_repost() {
-        let note = EventBuilder::new(Kind::TextNote, "hello")
+        let note = EventBuilder::new(Kind::TextNote)
+            .content("hello")
             .finalize(&Keys::generate())
             .unwrap();
         let relay_url = RelayUrl::parse("wss://relay.example.com").unwrap();
@@ -419,7 +421,8 @@ mod tests {
     #[test]
     fn protected_repost_has_empty_content() {
         let keys = Keys::generate();
-        let protected = EventBuilder::new(Kind::TextNote, "secret")
+        let protected = EventBuilder::new(Kind::TextNote)
+            .content("protected")
             .tag(Tag::protected())
             .finalize(&keys)
             .unwrap();

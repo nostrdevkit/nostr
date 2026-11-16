@@ -76,7 +76,9 @@ impl LiveStatusEvent {
 impl IntoEventBuilder for LiveStatusEvent {
     fn into_event_builder(self) -> EventBuilder {
         let tags: Vec<Tag> = self.status.into();
-        EventBuilder::new(Kind::UserStatus, self.content).tags(tags)
+        EventBuilder::new(Kind::UserStatus)
+            .content(self.content)
+            .tags(tags)
     }
 }
 

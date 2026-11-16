@@ -254,7 +254,7 @@ impl IntoEventBuilder for ZapReceipt<'_> {
         }
 
         tags.push(Nip57Tag::Sender(self.zap_request.pubkey).to_tag());
-        EventBuilder::new(Kind::ZapReceipt, "").tags(tags)
+        EventBuilder::new(Kind::ZapReceipt).tags(tags)
     }
 }
 
@@ -326,7 +326,9 @@ impl IntoEventBuilder for ZapRequestData {
     fn into_event_builder(self) -> EventBuilder {
         let message: String = self.message.clone();
         let tags: Vec<Tag> = self.into();
-        EventBuilder::new(Kind::ZapRequest, message).tags(tags)
+        EventBuilder::new(Kind::ZapRequest)
+            .content(message)
+            .tags(tags)
     }
 }
 

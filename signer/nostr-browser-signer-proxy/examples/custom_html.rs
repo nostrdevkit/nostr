@@ -49,7 +49,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Public key: {}", public_key);
 
     // Sign event
-    let event = EventBuilder::new(Kind::TextNote, "Testing browser signer proxy")
+    let event = EventBuilder::new(Kind::TextNote)
+        .content("Testing browser signer proxy")
         .finalize_async(&proxy)
         .await?;
     println!("Event: {}", event.as_json());
@@ -57,7 +58,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Build a gift wrap
     let receiver =
         PublicKey::parse("npub1drvpzev3syqt0kjrls50050uzf25gehpz9vgdw08hvex7e0vgfeq0eseet")?;
-    let rumor = EventBuilder::new(Kind::Custom(123), "test").finalize_unsigned(public_key);
+    let rumor = EventBuilder::new(Kind::Custom(123))
+        .content("test")
+        .finalize_unsigned(public_key);
     let gift_wrap = GiftWrapBuilder::new(receiver, rumor)
         .finalize_async(&proxy)
         .await?;

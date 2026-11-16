@@ -140,7 +140,9 @@ impl IntoEventBuilder for BlossomAuthorization {
         // Add the 't' tag to say what this auth is for
         tags.push(Tag::hashtag(self.action.to_string()));
 
-        EventBuilder::new(Kind::BlossomAuth, self.content).tags(tags)
+        EventBuilder::new(Kind::BlossomAuth)
+            .content(self.content)
+            .tags(tags)
     }
 }
 

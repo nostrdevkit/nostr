@@ -52,13 +52,13 @@ macro_rules! database_unit_tests {
             let keys_b = Keys::generate();
 
             let events = vec![
-                build_event(&keys_a, EventBuilder::new(Kind::TextNote, "Text Note A")),
-                build_event(&keys_b, EventBuilder::new(Kind::TextNote, "Text Note B")),
+                build_event(&keys_a, EventBuilder::new(Kind::TextNote).content("Text Note A")),
+                build_event(&keys_b, EventBuilder::new(Kind::TextNote).content("Text Note B")),
                 build_event(&keys_a, Metadata::new().name("account-a").display_name("Account A")),
                 build_event(&keys_b, Metadata::new().name("account-b").display_name("Account B")),
-                build_event(&keys_a, EventBuilder::new(Kind::Custom(33_333), "")
+                build_event(&keys_a, EventBuilder::new(Kind::Custom(33_333))
                     .tag(Tag::identifier("my-id-a"))),
-                build_event(&keys_b, EventBuilder::new(Kind::Custom(33_333), "")
+                build_event(&keys_b, EventBuilder::new(Kind::Custom(33_333))
                     .tag(Tag::identifier("my-id-b"))),
             ];
 
@@ -102,10 +102,10 @@ macro_rules! database_unit_tests {
             let to_vanish = Keys::generate();
             let helper = Keys::generate();
 
-            let event1 = EventBuilder::new(Kind::TextNote, "Hi 1")
+            let event1 = EventBuilder::new(Kind::TextNote).content("Hi 1")
                 .finalize(&to_vanish)
                 .unwrap();
-            let event2 = EventBuilder::new(Kind::TextNote, "Hi 2")
+            let event2 = EventBuilder::new(Kind::TextNote).content("Hi 2")
                 .finalize(&to_vanish)
                 .unwrap();
             let replaceable = ContactListBuilder::new([
@@ -114,11 +114,11 @@ macro_rules! database_unit_tests {
             ])
             .finalize(&to_vanish)
             .unwrap();
-            let addresable = EventBuilder::new(Kind::LongFormTextNote, "LONG")
+            let addresable = EventBuilder::new(Kind::LongFormTextNote).content("LONG")
                 .tag(Tag::identifier("lorem-ipsum".to_string()))
                 .finalize(&to_vanish)
                 .unwrap();
-            let dummy_gift_wrap = EventBuilder::new(Kind::GiftWrap, ":)")
+            let dummy_gift_wrap = EventBuilder::new(Kind::GiftWrap).content(":)")
                 .tag(to_vanish.public_key())
                 .finalize(&helper)
                 .unwrap();
@@ -311,7 +311,7 @@ macro_rules! database_unit_tests {
             let keys = Keys::generate();
 
             // Create first addressable event
-            let event1 = EventBuilder::new(Kind::from(32121), "Content 1")
+            let event1 = EventBuilder::new(Kind::from(32121)).content("Content 1")
                 .tag(Tag::identifier("test-id"))
                 .custom_created_at(Timestamp::from_secs(1000))
                 .finalize(&keys)
@@ -320,7 +320,7 @@ macro_rules! database_unit_tests {
             store.save_event(&event1).await.expect("Failed to save event");
 
             // Create newer addressable event with same identifier
-            let event2 = EventBuilder::new(Kind::from(32121), "Content 2")
+            let event2 = EventBuilder::new(Kind::from(32121)).content("Content 2")
                 .tag(Tag::identifier("test-id"))
                 .custom_created_at(Timestamp::from_secs(2000))
                 .finalize(&keys)
@@ -347,10 +347,10 @@ macro_rules! database_unit_tests {
             let keys = Keys::generate();
 
             // Create events to delete
-            let event1 = EventBuilder::new(Kind::TextNote, "To be deleted 1")
+            let event1 = EventBuilder::new(Kind::TextNote).content("To be deleted 1")
                 .finalize(&keys)
                 .expect("Failed to finalize");
-            let event2 = EventBuilder::new(Kind::TextNote, "To be deleted 2")
+            let event2 = EventBuilder::new(Kind::TextNote).content("To be deleted 2")
                 .finalize(&keys)
                 .expect("Failed to finalize");
 
@@ -392,7 +392,7 @@ macro_rules! database_unit_tests {
             let keys = Keys::generate();
 
             // Create events to delete
-            let event = EventBuilder::new(Kind::Custom(11_111), "To be deleted 1")
+            let event = EventBuilder::new(Kind::Custom(11_111)).content("To be deleted 1")
                 .finalize(&keys)
                 .expect("Failed to finalize");
 
@@ -465,7 +465,7 @@ macro_rules! database_unit_tests {
             let expiration = Timestamp::now() + 1;
             let expired_event = build_event(
                 &keys,
-                EventBuilder::new(Kind::TextNote, "expired")
+                EventBuilder::new(Kind::TextNote).content("expired")
                     .tag(Tag::expiration(expiration)),
             );
             store
@@ -514,7 +514,7 @@ macro_rules! database_unit_tests {
 
             let _added_events: usize = add_random_events(&store).await;
 
-            let (_keys, expected_event) = add_event(&store, EventBuilder::new(Kind::TextNote, "Test")).await;
+            let (_keys, expected_event) = add_event(&store, EventBuilder::new(Kind::TextNote).content("Test")).await;
 
             let event = get_existent_event_by_id(&store, &expected_event.id).await;
             assert_eq!(event, expected_event);
@@ -588,7 +588,7 @@ macro_rules! database_unit_tests {
 
             let (keys, expected_event) = add_event(
                     &store,
-                    EventBuilder::new(Kind::Custom(33_333), "")
+                    EventBuilder::new(Kind::Custom(33_333))
                         .tag(Tag::identifier("my-id-a"))
                         .custom_created_at(now - Duration::from_secs(120)),
                 )
@@ -609,7 +609,7 @@ macro_rules! database_unit_tests {
             // Replace previous event
             let (new_expected_event, status) = add_event_with_keys(
                     &store,
-                    EventBuilder::new(Kind::Custom(33_333), "Test replace")
+                    EventBuilder::new(Kind::Custom(33_333)).content("Test replace")
                         .tag(Tag::identifier("my-id-a"))
                         .custom_created_at(now),
                     &keys,
@@ -634,7 +634,7 @@ macro_rules! database_unit_tests {
             // Trey to add param replaceable event with older timestamp (MUSTN'T be stored)
             let (_, status) = add_event_with_keys(
                     &store,
-                    EventBuilder::new(Kind::Custom(33_333), "Test replace 2")
+                    EventBuilder::new(Kind::Custom(33_333)).content("Test replace 2")
                         .tag(Tag::identifier("my-id-a"))
                         .custom_created_at(now - Duration::from_secs(2000)),
                     &keys,
@@ -714,7 +714,7 @@ macro_rules! database_unit_tests {
             let keys = Keys::generate();
 
             // Create and save an event
-            let event = build_event(&keys, EventBuilder::new(Kind::TextNote, "Test event"));
+            let event = build_event(&keys, EventBuilder::new(Kind::TextNote).content("Test event"));
 
             let status = store.save_event(&event).await.expect("Failed to save event");
             assert_eq!(status, SaveEventStatus::Success);
@@ -737,7 +737,7 @@ macro_rules! database_unit_tests {
             assert_eq!(before_by_author.len(), 1);
 
             // Create and save a Kind 5 deletion event
-            let deletion_event = build_event(&keys, EventBuilder::new(Kind::EventDeletion, "")
+            let deletion_event = build_event(&keys, EventBuilder::new(Kind::EventDeletion)
                 .tag(Tag::event(event.id)));
 
             let del_status = store
@@ -997,7 +997,7 @@ macro_rules! database_unit_tests {
                 0
             );
 
-            let new_event = EventBuilder::new(Kind::TextNote, "It was a mistake, please accept my event")
+            let new_event = EventBuilder::new(Kind::TextNote).content("It was a mistake, please accept my event")
                 .finalize(&to_vanish)
                 .unwrap();
 
@@ -1047,7 +1047,7 @@ macro_rules! database_unit_tests {
                 0
             );
 
-            let new_event = EventBuilder::new(Kind::TextNote, "It was a mistake, please accept my event")
+            let new_event = EventBuilder::new(Kind::TextNote).content("It was a mistake, please accept my event")
                 .finalize(&to_vanish)
                 .unwrap();
 

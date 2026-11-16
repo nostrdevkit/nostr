@@ -59,7 +59,7 @@ impl InboxRelayList {
 
 impl IntoEventBuilder for InboxRelayList {
     fn into_event_builder(self) -> EventBuilder {
-        EventBuilder::new(Kind::InboxRelays, "").tags(self.relays.into_iter().map(Nip17Tag::Relay))
+        EventBuilder::new(Kind::InboxRelays).tags(self.relays.into_iter().map(Nip17Tag::Relay))
     }
 }
 
@@ -213,7 +213,8 @@ fn make_rumor(
     message: String,
     extra_tags: Vec<Tag>,
 ) -> UnsignedEvent {
-    EventBuilder::new(Kind::PrivateDirectMessage, message)
+    EventBuilder::new(Kind::PrivateDirectMessage)
+        .content(message)
         .tag(receiver)
         .tags(extra_tags)
         .finalize_unsigned(sender)

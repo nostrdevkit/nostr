@@ -84,8 +84,11 @@ impl ReactionBuilder {
 }
 
 impl IntoEventBuilder for ReactionBuilder {
+    #[inline]
     fn into_event_builder(self) -> EventBuilder {
-        EventBuilder::new(Kind::Reaction, self.reaction).tags(self.target.into_tags())
+        EventBuilder::new(Kind::Reaction)
+            .content(self.reaction)
+            .tags(self.target.into_tags())
     }
 }
 

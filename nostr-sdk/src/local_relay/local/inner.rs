@@ -1390,7 +1390,11 @@ impl InnerLocalRelay {
             let keys = Keys::generate();
 
             for _ in 0..500 {
-                events.insert(EventBuilder::new(Kind::TextNote, "Test").finalize(&keys)?);
+                events.insert(
+                    EventBuilder::new(Kind::TextNote)
+                        .content("Test")
+                        .finalize(&keys)?,
+                );
             }
 
             events
@@ -1796,7 +1800,8 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(2), policy.entered.notified())
             .await
             .unwrap();
-        let event = EventBuilder::new(Kind::TextNote, "during pause")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("during pause")
             .finalize(&Keys::generate())
             .unwrap();
         relay.save_event(&event).await.unwrap();
@@ -1883,7 +1888,8 @@ mod tests {
             message => panic!("expected recovered stored event, got {message:?}"),
         }
         assert_eq!(next_frame(&mut client).await, r#"["EOSE","recovered"]"#);
-        let event = EventBuilder::new(Kind::TextNote, "after recovery")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("after recovery")
             .finalize(&Keys::generate())
             .unwrap();
         assert!(relay.notify_event(event.clone()));
@@ -2018,7 +2024,8 @@ mod tests {
     #[tokio::test]
     async fn write_policy_is_applied_before_duplicate_lookup() {
         let relay = InnerLocalRelay::new(LocalRelayBuilder::default().write_policy(RejectWrites));
-        let event = EventBuilder::new(Kind::TextNote, "already stored")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("already stored")
             .finalize(&Keys::generate())
             .unwrap();
         relay.database.save_event(&event).await.unwrap();
@@ -2428,7 +2435,8 @@ mod tests {
     #[tokio::test]
     async fn zero_auth_rate_rejects_before_event_verification() {
         let relay = InnerLocalRelay::new(LocalRelayBuilder::default().auth_events_per_minute(0));
-        let event = EventBuilder::new(Kind::TextNote, "not an auth event")
+        let event = EventBuilder::new(Kind::TextNote)
+            .content("not an auth event")
             .finalize(&Keys::generate())
             .unwrap();
         let (server_stream, client_stream) = tokio::io::duplex(16 * 1024);

@@ -237,7 +237,9 @@ impl IntoEventBuilder for CodeSnippet {
             tags.push(NipC0Tag::Dependency(dep).into());
         }
 
-        EventBuilder::new(Kind::CodeSnippet, self.snippet).tags(tags)
+        EventBuilder::new(Kind::CodeSnippet)
+            .content(self.snippet)
+            .tags(tags)
     }
 }
 
