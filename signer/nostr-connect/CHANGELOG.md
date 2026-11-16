@@ -27,6 +27,12 @@
 
 -->
 
+## Unreleased
+
+### Security
+
+- Reject ack responses in client-initiated flow
+
 ## v0.45.2 - 2026/09/11
 
 ### Fixed
