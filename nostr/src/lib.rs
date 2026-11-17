@@ -35,5 +35,7 @@ pub mod message;
 pub mod nips;
 pub mod parser;
 pub mod prelude;
+#[cfg(all(test, feature = "std"))]
+mod test_utils;
 pub mod types;
 mod util;

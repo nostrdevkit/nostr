@@ -409,6 +409,8 @@ mod tests {
     use super::*;
     #[cfg(all(feature = "std", feature = "os-rng"))]
     use crate::key::Keys;
+    #[cfg(feature = "std")]
+    use crate::test_utils::allocation_delta;
 
     #[test]
     fn test_tags_deser_without_recommended_relay() {
@@ -568,6 +570,33 @@ mod tests {
         let json: &str = r#"{"content":"uRuvYr585B80L6rSJiHocw==?iv=oh6LVqdsYYol3JfFnXTbPA==","created_at":1640839235,"id":"2be17aa3031bdcb006f0fce80c146dea9c1c0268b0af2398bb673365c6444d45","kind":4,"pubkey":"f86c44a2de95d9149b51c6a29afeabba264c18e2fa7c49de93424a0c56947785","sig":"a5d9290ef9659083c490b303eb7ee41356d8778ff19f2f91776c8dc4443388a64ffcf336e61af4c25c05ac3ae952d1ced889ed655b67790891222aaa15b99fdd","tags":[["p","13adc511de7e1cfcf1c6b7f6365fb5a03442d7bcacf565ea57fa7770912c023d"]]}"#;
         let event = Event::from_json(json).unwrap();
         assert!(!event.is_protected());
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn test_event_allocations_with_content_and_tags() {
+        let json: &str = r#"{"id":"3e9e9c2fbf263590860a9c60a7de6b0d166230a5a15aa8dcdb70f537cec9807a","pubkey":"3bbddb5c7233ad993b41cb639e63122120f391b8580a9b83aae33c648230e0a3","created_at":1716508454,"kind":7,"sig":"3f2ba6d713e4851500b81de2d2ef44b72f1eff061898bf8488e74f7e4ed141b0dadab4c3a9c6b237f3a6db83171bd41eafd7ab973f6fb067a4305e95abeadeee","tags":[["e","e1e786c60ed884b6e784712aaf70e63b848b7403ef651b52b701d87739ea1808","","","04c915daefee38317fa734444acee390a8269fe5810b2241e5e6dd343dfbecc9"],["p","04c915daefee38317fa734444acee390a8269fe5810b2241e5e6dd343dfbecc9"]],"content":"+"}"#;
+
+        let (_event, delta) = allocation_delta(|| Event::from_json(json).unwrap());
+        assert_eq!(delta, 9);
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn test_event_allocations_with_content_and_without_tags() {
+        let json: &str = r#"{"id":"cb8feca582979d91fe90455867b34dbf4d65e4b86e86b3c68c368ca9f9eef6f2","pubkey":"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798","created_at":1707409439,"kind":1,"tags":[],"content":"hello members of the secret group","sig":"fa163f5cfb75d77d9b6269011872ee22b34fb48d23251e9879bb1e4ccbdd8aaaf4b6dc5f5084a65ef42c52fbcde8f3178bac3ba207de827ec513a6aa39fa684c"}"#;
+
+        let (_event, delta) = allocation_delta(|| Event::from_json(json).unwrap());
+        assert_eq!(delta, 1);
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn test_event_allocations_without_content_and_tags() {
+        let json: &str = r#"{"id":"cb8feca582979d91fe90455867b34dbf4d65e4b86e86b3c68c368ca9f9eef6f2","pubkey":"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798","created_at":1707409439,"kind":1,"tags":[],"content":"","sig":"fa163f5cfb75d77d9b6269011872ee22b34fb48d23251e9879bb1e4ccbdd8aaaf4b6dc5f5084a65ef42c52fbcde8f3178bac3ba207de827ec513a6aa39fa684c"}"#;
+
+        let (_event, delta) = allocation_delta(|| Event::from_json(json).unwrap());
+        assert_eq!(delta, 0);
     }
 }
 
