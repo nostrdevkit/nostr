@@ -15,6 +15,10 @@
 #[cfg(not(any(feature = "std", feature = "alloc")))]
 compile_error!("at least one of the `std` or `alloc` features must be enabled");
 
+// See event tag and tags modules ("usize as u32" castings).
+#[cfg(target_pointer_width = "16")]
+compile_error!("16-bit pointer sizes are not supported.");
+
 #[cfg(bench)]
 extern crate test;
 

@@ -557,7 +557,7 @@ impl Lmdb {
         if self.options.process_nip62
             && event.kind == Kind::RequestToVanish
             && nip62::is_valid_vanish_request_for_relay(
-                event.tags.as_slice(),
+                &event.tags,
                 self.options.relay_url.as_ref(),
             )
         {
@@ -1534,11 +1534,11 @@ mod tests {
                 let builder = NostrLmdbBuilder::new(dir.path());
                 let target = EventBuilder::new(kind)
                     .content("target")
-                    .tags([Tag::identifier("test")])
+                    .tag(Nip01Tag::identifier("test"))
                     .finalize(&keys)
                     .unwrap();
                 let deletion = EventBuilder::new(Kind::EventDeletion)
-                    .tags([Tag::event(target.id)])
+                    .tag(target.id)
                     .finalize(&keys)
                     .unwrap();
                 {
@@ -1580,7 +1580,7 @@ mod tests {
             .finalize(&keys)
             .unwrap();
         let deletion = EventBuilder::new(Kind::EventDeletion)
-            .tags([Tag::event(target.id)])
+            .tag(target.id)
             .finalize(&keys)
             .unwrap();
         {
@@ -1623,7 +1623,7 @@ mod tests {
             let dir = TempDir::new().unwrap();
             let lmdb = Lmdb::from_builder(NostrLmdbBuilder::new(dir.path())).unwrap();
             let deletion = EventBuilder::new(Kind::EventDeletion)
-                .tags([Tag::event(target.id)])
+                .tag(target.id)
                 .finalize(&stranger)
                 .unwrap();
             if !deletion_first {
@@ -1651,18 +1651,18 @@ mod tests {
             let lmdb = Lmdb::from_builder(NostrLmdbBuilder::new(dir.path())).unwrap();
             let older = EventBuilder::new(kind)
                 .content("live")
-                .tags([Tag::identifier("test")])
+                .tag(Nip01Tag::identifier("test"))
                 .custom_created_at(Timestamp::from_secs(10))
                 .finalize(&keys)
                 .unwrap();
             let target = EventBuilder::new(kind)
                 .content("deleted")
-                .tags([Tag::identifier("test")])
+                .tag(Nip01Tag::identifier("test"))
                 .custom_created_at(Timestamp::from_secs(20))
                 .finalize(&keys)
                 .unwrap();
             let deletion = EventBuilder::new(Kind::EventDeletion)
-                .tags([Tag::event(target.id)])
+                .tag(target.id)
                 .finalize(&keys)
                 .unwrap();
             assert_eq!(save_event(&lmdb, &older), SaveEventStatus::Success);
@@ -1698,7 +1698,7 @@ mod tests {
             ),
         ] {
             let request = EventBuilder::new(kind)
-                .tags([Tag::parse([tag_name, tag_value.as_str()]).unwrap()])
+                .tag([tag_name, tag_value.as_str()])
                 .finalize(&keys)
                 .unwrap();
             assert_eq!(save_event(&lmdb, &request), SaveEventStatus::Success);
@@ -1717,7 +1717,7 @@ mod tests {
             .finalize(&keys)
             .unwrap();
         let deletion = EventBuilder::new(Kind::EventDeletion)
-            .tags([Tag::event(target.id)])
+            .tag(target.id)
             .finalize(&keys)
             .unwrap();
         assert_eq!(save_event(&lmdb, &deletion), SaveEventStatus::Success);
@@ -1744,7 +1744,7 @@ mod tests {
             .finalize(&keys)
             .unwrap();
         let deletion = EventBuilder::new(Kind::EventDeletion)
-            .tags([Tag::event(known.id), Tag::event(unknown.id)])
+            .tags([Nip01Tag::event(known.id), Nip01Tag::event(unknown.id)])
             .finalize(&keys)
             .unwrap();
         assert_eq!(save_event(&lmdb, &known), SaveEventStatus::Success);
@@ -1793,7 +1793,7 @@ mod tests {
             };
             for author in authors {
                 let deletion = EventBuilder::new(Kind::EventDeletion)
-                    .tags([Tag::event(target.id)])
+                    .tag(target.id)
                     .finalize(author)
                     .unwrap();
                 assert_eq!(save_event(&lmdb, &deletion), SaveEventStatus::Success);
@@ -1825,13 +1825,17 @@ mod tests {
             .unwrap();
         assert_eq!(save_event(&lmdb, &known), SaveEventStatus::Success);
         assert_eq!(save_event(&lmdb, &foreign), SaveEventStatus::Success);
-        let foreign_coordinate = Coordinate::new(Kind::Metadata, stranger.public_key()).to_string();
+        let foreign_coordinate = Coordinate::new(Kind::Metadata, stranger.public_key());
         for invalid_tag in [
-            Tag::event(foreign.id),
-            Tag::parse(["a", &foreign_coordinate]).unwrap(),
+            Nip01Tag::event(foreign.id),
+            Nip01Tag::coordinate(foreign_coordinate.clone()),
         ] {
             let deletion = EventBuilder::new(Kind::EventDeletion)
-                .tags([Tag::event(known.id), Tag::event(unknown.id), invalid_tag])
+                .tags([
+                    Nip01Tag::event(known.id),
+                    Nip01Tag::event(unknown.id),
+                    invalid_tag,
+                ])
                 .finalize(&keys)
                 .unwrap();
             assert_eq!(
@@ -1869,11 +1873,7 @@ mod tests {
             .finalize(&stranger)
             .unwrap();
         let deletion = EventBuilder::new(Kind::EventDeletion)
-            .tags([
-                Tag::event(known.id),
-                Tag::event(unknown.id),
-                Tag::event(foreign.id),
-            ])
+            .tags([known.id, unknown.id, foreign.id])
             .finalize(&keys)
             .unwrap();
         {

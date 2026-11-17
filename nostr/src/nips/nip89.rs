@@ -7,13 +7,11 @@
 //! <https://github.com/nostr-protocol/nips/blob/master/89.md>
 
 use alloc::string::{String, ToString};
-use alloc::vec;
-use alloc::vec::Vec;
 
 use super::nip01::Coordinate;
 use super::util::{missing_tag_kind, take_string, unknown_tag};
 use crate::error::Error;
-use crate::event::{Tag, impl_tag_codec_conversions};
+use crate::event::impl_tag_codec_conversions;
 use crate::types::url::RelayUrl;
 
 const CLIENT: &str = "client";
@@ -47,25 +45,19 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
-        match self {
-            Self::Client { name, address } => {
-                let mut tag: Vec<String> = vec![CLIENT.to_string(), name.clone()];
+    fn write(self, tx) {
+        let Self::Client { name, address } = self;
 
-                match address {
-                    Some((coordinate, Some(hint))) => {
-                        tag.reserve_exact(2);
-                        tag.push(coordinate.to_string());
-                        tag.push(hint.to_string());
-                    }
-                    Some((coordinate, None)) => {
-                        tag.push(coordinate.to_string());
-                    }
-                    _ => {}
-                }
+        tx.push_str(CLIENT);
+        tx.push_str(&name);
 
-                Tag::new(tag)
+        match address {
+            Some((coordinate, Some(hint))) => {
+                tx.push_str(&coordinate.to_string());
+                tx.push_str(hint.as_str());
             }
+            Some((coordinate, None)) => tx.push_str(&coordinate.to_string()),
+            None => {}
         }
     }
 }
@@ -112,6 +104,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::Tags;
 
     #[test]
     fn test_client_tag() {
@@ -125,7 +118,7 @@ mod tests {
                 address: None
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -138,7 +131,7 @@ mod tests {
         let parsed = Nip89Tag::parse(&tag).unwrap();
 
         assert_eq!(parsed, Nip89Tag::Client {name: String::from("voyage"), address: Some((Coordinate::parse("30023:a695f6b60119d9521934a691347d9f78e8770b56da16bb255ee286ddf9fda919:ipsum").unwrap(), None))});
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -152,7 +145,7 @@ mod tests {
         let parsed = Nip89Tag::parse(&tag).unwrap();
 
         assert_eq!(parsed, Nip89Tag::Client {name: String::from("voyage"), address: Some((Coordinate::parse("30023:a695f6b60119d9521934a691347d9f78e8770b56da16bb255ee286ddf9fda919:ipsum").unwrap(), Some(RelayUrl::parse("wss://relay.damus.io").unwrap())))});
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -167,8 +160,8 @@ mod tests {
 
         assert_eq!(parsed, Nip89Tag::Client {name: String::from("voyage"), address: Some((Coordinate::parse("30023:a695f6b60119d9521934a691347d9f78e8770b56da16bb255ee286ddf9fda919:ipsum").unwrap(), None))});
         assert_eq!(
-            parsed.to_tag(),
-            Tag::parse(tag[..=2].iter().copied()).unwrap()
+            Tags::from_iter([parsed]),
+            Tags::parse([tag[..=2].iter().copied()]).unwrap()
         ); // The empty relay-hint is not serialized
     }
 }

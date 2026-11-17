@@ -211,7 +211,7 @@ impl Tokens {
 
 #[cfg(test)]
 mod tests {
-    use nostr::event::{EventBuilder, FinalizeEvent, IntoEventBuilder, Tag};
+    use nostr::event::{EventBuilder, FinalizeEvent, IntoEventBuilder};
     use nostr::key::Keys;
 
     use super::*;
@@ -325,7 +325,7 @@ mod tests {
         let relay_url = RelayUrl::parse("ws://127.0.0.1:8080").unwrap();
         let event = EventBuilder::new(Kind::TextNote)
             .content("unrelated")
-            .tag(Tag::custom("challenge", [challenge.as_str()]))
+            .tag(["challenge", challenge.as_str()])
             .finalize(&keys)
             .unwrap();
 

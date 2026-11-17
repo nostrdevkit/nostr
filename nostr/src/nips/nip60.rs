@@ -18,9 +18,11 @@ use crate::event::EventId;
 #[cfg(feature = "std")]
 use crate::event::{Event, Kind};
 #[cfg(all(feature = "std", feature = "os-rng"))]
-use crate::event::{EventBuilder, IntoEventBuilder, Tag};
+use crate::event::{EventBuilder, IntoEventBuilder};
 #[cfg(feature = "std")]
 use crate::key::{PublicKey, SecretKey};
+#[cfg(all(feature = "std", feature = "os-rng"))]
+use crate::nips::nip40::Nip40Tag;
 use crate::types::time::Timestamp;
 use crate::types::url::Url;
 #[cfg(feature = "std")]
@@ -413,9 +415,13 @@ impl SpendingHistory {
 
         // Check unencrypted e tags for redeemed events
         for tag in event.tags.iter() {
-            let slice = tag.as_slice();
-            if slice.len() >= 4 && slice[0] == E_TAG_STR && slice[3] == EVENT_MARKER_REDEEMED {
-                redeemed.push(EventId::from_hex(&slice[1])?);
+            if tag.len() >= 4
+                && tag.get(0) == Some(E_TAG_STR)
+                && tag.get(3) == Some(EVENT_MARKER_REDEEMED)
+            {
+                if let Some(id) = tag.get(1) {
+                    redeemed.push(EventId::from_hex(id)?);
+                }
             }
         }
 
@@ -462,28 +468,22 @@ impl SpendingHistory {
 
         // Add created event references (encrypted)
         for event_id in &self.created {
-            let tag: Tag = Tag::custom(
-                "e",
-                [
-                    event_id.to_hex(),
-                    String::new(),
-                    EVENT_MARKER_CREATED.to_string(),
-                ],
-            );
-            data.push(tag.to_vec());
+            data.push(vec![
+                String::from("e"),
+                event_id.to_hex(),
+                String::new(),
+                EVENT_MARKER_CREATED.to_string(),
+            ]);
         }
 
         // Add destroyed event references (encrypted)
         for event_id in &self.destroyed {
-            let tag: Tag = Tag::custom(
-                "e",
-                [
-                    event_id.to_hex(),
-                    String::new(),
-                    EVENT_MARKER_DESTROYED.to_string(),
-                ],
-            );
-            data.push(tag.to_vec());
+            data.push(vec![
+                String::from("e"),
+                event_id.to_hex(),
+                String::new(),
+                EVENT_MARKER_DESTROYED.to_string(),
+            ]);
         }
 
         let json: String = serde_json::to_string(&data).map_err(Error::malformed)?;
@@ -643,14 +643,12 @@ pub struct PreparedSpendingHistoryEvent {
 impl IntoEventBuilder for PreparedSpendingHistoryEvent {
     fn into_event_builder(self) -> EventBuilder {
         let tags = self.redeemed.into_iter().map(|event_id| {
-            Tag::custom(
-                "e",
-                [
-                    event_id.to_hex(),
-                    String::new(),
-                    String::from(EVENT_MARKER_REDEEMED),
-                ],
-            )
+            vec![
+                String::from("e"),
+                event_id.to_hex(),
+                String::new(),
+                String::from(EVENT_MARKER_REDEEMED),
+            ]
         });
         EventBuilder::new(Kind::CashuWalletSpendingHistory)
             .content(self.content)
@@ -670,13 +668,10 @@ pub struct PreparedQuoteEvent {
 impl IntoEventBuilder for PreparedQuoteEvent {
     fn into_event_builder(self) -> EventBuilder {
         let expiration = Timestamp::now() + 14 * 24 * 60 * 60;
-        let tags = [
-            Tag::custom(MINT, [self.mint.as_str()]),
-            Tag::expiration(expiration),
-        ];
         EventBuilder::new(Kind::CashuWalletQuote)
             .content(self.content)
-            .tags(tags)
+            .tag([MINT, self.mint.as_str()])
+            .tag(Nip40Tag::Expiration(expiration))
     }
 }
 

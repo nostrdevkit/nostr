@@ -6,7 +6,7 @@
 //!
 //! <https://github.com/nostr-protocol/nips/blob/master/02.md>
 
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use super::util::{
@@ -14,7 +14,9 @@ use super::util::{
     unknown_tag,
 };
 use crate::error::Error;
-use crate::event::{EventBuilder, IntoEventBuilder, Kind, Tag, impl_tag_codec_conversions};
+use crate::event::{
+    EventBuilder, IntoEventBuilder, Kind, TagWriter, WriteTag, impl_tag_codec_conversions,
+};
 use crate::key::PublicKey;
 use crate::types::url::RelayUrl;
 
@@ -41,13 +43,14 @@ impl Contact {
     }
 }
 
-impl From<Contact> for Nip02Tag {
-    fn from(contact: Contact) -> Self {
-        Self::PublicKey {
-            public_key: contact.public_key,
-            relay_hint: contact.relay_url,
-            alias: contact.alias,
+impl WriteTag for Contact {
+    fn write(self, tx: &mut TagWriter<'_>) {
+        Nip02Tag::PublicKey {
+            public_key: self.public_key,
+            relay_hint: self.relay_url,
+            alias: self.alias,
         }
+        .write(tx)
     }
 }
 
@@ -92,29 +95,25 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
+    fn write(self, tx) {
         let Self::PublicKey {
             public_key,
             relay_hint,
             alias,
         } = self;
 
-        let mut tag: Vec<String> = Vec::with_capacity(2 + relay_hint.is_some() as usize);
-
-        tag.push(String::from("p"));
-        tag.push(public_key.to_hex());
+        tx.push_str("p");
+        tx.push_hex(public_key.as_bytes());
 
         if let Some(relay_hint) = relay_hint {
-            tag.push(relay_hint.to_string());
+            tx.push_str(relay_hint.as_str());
         } else if alias.is_some() {
-            tag.push(String::new());
+            tx.push_str("");
         }
 
         if let Some(alias) = alias {
-            tag.push(alias.to_string());
+            tx.push_str(&alias);
         }
-
-        Tag::new(tag)
     }
 }
 
@@ -155,15 +154,7 @@ impl ContactListBuilder {
 
 impl IntoEventBuilder for ContactListBuilder {
     fn into_event_builder(self) -> EventBuilder {
-        let tags = self.contacts.into_iter().map(|contact| {
-            Nip02Tag::PublicKey {
-                public_key: contact.public_key,
-                relay_hint: contact.relay_url,
-                alias: contact.alias,
-            }
-            .to_tag()
-        });
-        EventBuilder::new(Kind::ContactList).tags(tags)
+        EventBuilder::new(Kind::ContactList).tags(self.contacts)
     }
 }
 
@@ -188,7 +179,7 @@ mod tests {
                 alias: None
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         // With relay hint
         let tag = vec!["p", raw, "wss://relay.damus.io/"];
@@ -201,7 +192,7 @@ mod tests {
                 alias: None
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         // With relay hint and alias
         let tag = vec!["p", raw, "wss://relay.damus.io/", "alice"];
@@ -214,7 +205,7 @@ mod tests {
                 alias: Some(String::from("alice"))
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         // With alias and no relay hint
         let tag = vec!["p", raw, "", "alice"];
@@ -227,7 +218,7 @@ mod tests {
                 alias: Some(String::from("alice"))
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         // Invalid public key
         let tag = vec!["p", "hello"];
@@ -262,13 +253,12 @@ mod tests {
         assert_eq!(event.pubkey, keys.public_key());
         assert_eq!(event.tags.len(), 1);
         assert_eq!(
-            event.tags[0],
+            Nip02Tag::try_from(event.tags.first().unwrap()).unwrap(),
             Nip02Tag::PublicKey {
                 public_key: contact.public_key,
                 relay_hint: contact.relay_url,
                 alias: contact.alias,
             }
-            .to_tag()
         );
     }
 }

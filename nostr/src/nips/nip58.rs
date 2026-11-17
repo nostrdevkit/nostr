@@ -7,7 +7,6 @@
 //! <https://github.com/nostr-protocol/nips/blob/master/58.md>
 
 use alloc::string::{String, ToString};
-use alloc::vec;
 use alloc::vec::Vec;
 
 pub use super::image::ImageDimensions;
@@ -18,7 +17,8 @@ use super::util::{
 };
 use crate::error::{Error, ErrorKind};
 use crate::event::{
-    Event, EventBuilder, EventId, IntoEventBuilder, Kind, Tag, impl_tag_codec_conversions,
+    Event, EventBuilder, EventId, IntoEventBuilder, Kind, TagWriter, Tags,
+    impl_tag_codec_conversions,
 };
 use crate::key::PublicKey;
 use crate::types::{RelayUrl, Url};
@@ -87,23 +87,19 @@ impl BadgeDefinition {
 
 impl IntoEventBuilder for BadgeDefinition {
     fn into_event_builder(self) -> EventBuilder {
-        let mut tags: Vec<Tag> = vec![Nip58Tag::Identifier(self.badge_id).to_tag()];
-        tags.extend(self.name.map(Nip58Tag::Name).map(|tag| tag.to_tag()));
-        tags.extend(
-            self.description
-                .map(Nip58Tag::Description)
-                .map(|tag| tag.to_tag()),
-        );
-        tags.extend(
-            self.image
-                .map(|(url, dimensions)| Nip58Tag::Image(url, dimensions).to_tag()),
-        );
-        tags.extend(
-            self.thumbnails
-                .into_iter()
-                .map(|(url, dimensions)| Nip58Tag::Thumb(url, dimensions).to_tag()),
-        );
-        EventBuilder::new(Kind::BadgeDefinition).tags(tags)
+        EventBuilder::new(Kind::BadgeDefinition)
+            .tag(Nip58Tag::Identifier(self.badge_id))
+            .tags(self.name.map(Nip58Tag::Name))
+            .tags(self.description.map(Nip58Tag::Description))
+            .tags(
+                self.image
+                    .map(|(url, dimensions)| Nip58Tag::Image(url, dimensions)),
+            )
+            .tags(
+                self.thumbnails
+                    .into_iter()
+                    .map(|(url, dimensions)| Nip58Tag::Thumb(url, dimensions)),
+            )
     }
 }
 
@@ -136,9 +132,13 @@ impl BadgeAward {
 
 impl IntoEventBuilder for BadgeAward {
     fn into_event_builder(self) -> EventBuilder {
-        let tags = core::iter::once(Tag::coordinate(self.badge_definition, None))
-            .chain(self.awarded_public_keys.into_iter().map(Tag::public_key));
-        EventBuilder::new(Kind::BadgeAward).tags(tags)
+        EventBuilder::new(Kind::BadgeAward)
+            .tag(Nip01Tag::coordinate(self.badge_definition))
+            .tags(
+                self.awarded_public_keys
+                    .into_iter()
+                    .map(Nip01Tag::public_key),
+            )
     }
 }
 
@@ -206,7 +206,7 @@ impl ProfileBadges {
         });
         let awards = badge_awards.iter().filter_map(|event| {
             let (_, award_relay_hint) =
-                extract_awarded_public_key(event.tags.as_slice(), awarded_public_key)?;
+                extract_awarded_public_key(&event.tags, awarded_public_key)?;
             let (identifier, definition, definition_relay_hint) =
                 event
                     .tags
@@ -258,22 +258,23 @@ impl ProfileBadges {
 
 impl IntoEventBuilder for ProfileBadges {
     fn into_event_builder(self) -> EventBuilder {
-        let tags = self.badges.into_iter().flat_map(|badge| {
-            [
-                Nip01Tag::Coordinate {
-                    coordinate: badge.definition,
-                    relay_hint: badge.definition_relay_hint,
-                }
-                .to_tag(),
-                Nip01Tag::Event {
-                    id: badge.award,
-                    relay_hint: badge.award_relay_hint,
-                    public_key: None,
-                }
-                .to_tag(),
-            ]
-        });
-        EventBuilder::new(Kind::ProfileBadges).tags(tags)
+        let mut builder: EventBuilder = EventBuilder::new(Kind::ProfileBadges);
+
+        builder.tags.reserve(2 * self.badges.len());
+
+        for badge in self.badges {
+            builder.tags.push(Nip01Tag::Coordinate {
+                coordinate: badge.definition,
+                relay_hint: badge.definition_relay_hint,
+            });
+            builder.tags.push(Nip01Tag::Event {
+                id: badge.award,
+                relay_hint: badge.award_relay_hint,
+                public_key: None,
+            });
+        }
+
+        builder
     }
 }
 
@@ -316,17 +317,26 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
+    fn write(self, tx) {
         match self {
             Self::Identifier(identifier) => {
-                Tag::new(vec![String::from(IDENTIFIER), identifier.clone()])
+                tx.push_str(IDENTIFIER);
+                tx.push_str(&identifier);
             }
-            Self::Name(name) => Tag::new(vec![String::from(NAME), name.clone()]),
+            Self::Name(name) => {
+                tx.push_str(NAME);
+                tx.push_str(&name);
+            }
             Self::Description(description) => {
-                Tag::new(vec![String::from(DESCRIPTION), description.clone()])
+                tx.push_str(DESCRIPTION);
+                tx.push_str(&description);
             }
-            Self::Image(url, dimensions) => to_url_and_dimensions_tag(IMAGE, url, dimensions),
-            Self::Thumb(url, dimensions) => to_url_and_dimensions_tag(THUMB, url, dimensions),
+            Self::Image(url, dimensions) => {
+                to_url_and_dimensions_tag(tx, IMAGE, &url, &dimensions)
+            }
+            Self::Thumb(url, dimensions) => {
+                to_url_and_dimensions_tag(tx, THUMB, &url, &dimensions)
+            }
         }
     }
 }
@@ -345,16 +355,18 @@ where
     Ok((url, dimensions))
 }
 
-fn to_url_and_dimensions_tag(kind: &str, url: &Url, dimensions: &Option<ImageDimensions>) -> Tag {
-    let mut tag: Vec<String> = Vec::with_capacity(2 + dimensions.is_some() as usize);
-    tag.push(String::from(kind));
-    tag.push(url.to_string());
+fn to_url_and_dimensions_tag(
+    tx: &mut TagWriter,
+    kind: &str,
+    url: &Url,
+    dimensions: &Option<ImageDimensions>,
+) {
+    tx.push_str(kind);
+    tx.push_str(url.as_str());
 
     if let Some(dimensions) = dimensions {
-        tag.push(dimensions.to_string());
+        tx.push_str(&dimensions.to_string());
     }
-
-    Tag::new(tag)
 }
 
 /// Helper function to filter events for a specific [`Kind`]
@@ -368,7 +380,7 @@ pub(crate) fn filter_for_kind(events: Vec<Event>, kind_needed: &Kind) -> Vec<Eve
 
 /// Helper function to extract the awarded public key from an array of PubKey tags
 pub(crate) fn extract_awarded_public_key(
-    tags: &[Tag],
+    tags: &Tags,
     awarded_public_key: PublicKey,
 ) -> Option<(PublicKey, Option<RelayUrl>)> {
     tags.iter().find_map(|t| match Nip01Tag::try_from(t) {
@@ -393,7 +405,7 @@ mod tests {
         let tag = vec!["d", "bravery"];
         let parsed = Nip58Tag::parse(&tag).unwrap();
         assert_eq!(parsed, Nip58Tag::Identifier(String::from("bravery")));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -401,7 +413,7 @@ mod tests {
         let tag = vec!["name", "Medal of Bravery"];
         let parsed = Nip58Tag::parse(&tag).unwrap();
         assert_eq!(parsed, Nip58Tag::Name(String::from("Medal of Bravery")));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -412,7 +424,7 @@ mod tests {
             parsed,
             Nip58Tag::Description(String::from("Awarded to users demonstrating bravery"))
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -430,7 +442,7 @@ mod tests {
                 Some(ImageDimensions::new(1024, 1024))
             )
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -448,7 +460,7 @@ mod tests {
                 Some(ImageDimensions::new(256, 256))
             )
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -458,8 +470,10 @@ mod tests {
             .name("Bravery")
             .description("A brave soul");
         let generic = definition_builder.clone().into_event_builder();
+        let tags: Tags = generic.tags.into();
+
         assert_eq!(generic.kind, Kind::BadgeDefinition);
-        assert_eq!(generic.tags.identifier(), Some(String::from("bravery")));
+        assert_eq!(tags.identifier().as_deref(), Some("bravery"));
 
         let badge_keys = Keys::generate();
         let definition = definition_builder.finalize(&badge_keys).unwrap();

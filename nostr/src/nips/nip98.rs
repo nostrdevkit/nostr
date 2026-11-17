@@ -10,7 +10,9 @@
 //! <https://github.com/nostr-protocol/nips/blob/master/98.md>
 
 use alloc::format;
-use alloc::string::{String, ToString};
+#[cfg(all(feature = "std", feature = "rand"))]
+use alloc::string::String;
+#[cfg(feature = "std")]
 use alloc::vec::Vec;
 use core::fmt;
 use core::str::FromStr;
@@ -25,7 +27,7 @@ use crate::error::{Error, ErrorKind};
 use crate::event::Event;
 #[cfg(all(feature = "std", feature = "rand"))]
 use crate::event::{AsyncSignEvent, FinalizeEventAsync};
-use crate::event::{EventBuilder, IntoEventBuilder, Kind, Tag, impl_tag_codec_conversions};
+use crate::event::{EventBuilder, IntoEventBuilder, Kind, Tags, impl_tag_codec_conversions};
 #[cfg(all(feature = "std", feature = "rand"))]
 use crate::key::AsyncGetPublicKey;
 #[cfg(feature = "std")]
@@ -194,11 +196,20 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
+    fn write(self, tx) {
         match self {
-            Self::AbsoluteURL(url) => Tag::new(vec![String::from(ABSOLUTE_URL), url.to_string()]),
-            Self::Method(method) => Tag::new(vec![String::from(METHOD), method.to_string()]),
-            Self::Payload(payload) => Tag::new(vec![String::from(PAYLOAD), payload.to_string()]),
+            Self::AbsoluteURL(url) => {
+                tx.push_str(ABSOLUTE_URL);
+                tx.push_str(url.as_str());
+            }
+            Self::Method(method) => {
+                tx.push_str(METHOD);
+                tx.push_str(method.as_str());
+            }
+            Self::Payload(payload) => {
+                tx.push_str(PAYLOAD);
+                tx.push_hex(payload.as_bytes());
+            }
         }
     }
 }
@@ -237,35 +248,27 @@ impl HttpData {
 
 impl IntoEventBuilder for HttpData {
     fn into_event_builder(self) -> EventBuilder {
-        let tags: Vec<Tag> = self.into();
-        EventBuilder::new(Kind::HttpAuth).tags(tags)
-    }
-}
-
-impl From<HttpData> for Vec<Tag> {
-    fn from(data: HttpData) -> Self {
-        let HttpData {
+        let Self {
             url,
             method,
             payload,
-        } = data;
+        } = self;
 
-        let mut tags: Vec<Tag> = vec![
-            Nip98Tag::AbsoluteURL(url).to_tag(),
-            Nip98Tag::Method(method).to_tag(),
-        ];
-        if let Some(payload) = payload {
-            tags.push(Nip98Tag::Payload(payload).to_tag());
-        }
+        let mut builder: EventBuilder = EventBuilder::new(Kind::HttpAuth);
 
-        tags
+        builder.tags.reserve(2 + payload.is_some() as usize);
+
+        builder
+            .tag(Nip98Tag::AbsoluteURL(url))
+            .tag(Nip98Tag::Method(method))
+            .tag_maybe(payload.map(Nip98Tag::Payload))
     }
 }
 
-impl TryFrom<Vec<Tag>> for HttpData {
+impl TryFrom<Tags> for HttpData {
     type Error = Error;
 
-    fn try_from(value: Vec<Tag>) -> Result<Self, Self::Error> {
+    fn try_from(value: Tags) -> Result<Self, Self::Error> {
         let mut url: Option<Url> = None;
         let mut method: Option<HttpMethod> = None;
         let mut payload: Option<Sha256Hash> = None;
@@ -348,7 +351,7 @@ pub fn verify_auth_header(
         return Err(wrong_auth_header_kind());
     }
 
-    let http_data = HttpData::try_from(event.tags.iter().cloned().collect::<Vec<Tag>>())?;
+    let http_data = HttpData::try_from(event.tags.clone())?;
     let authorized_url: Url = http_data.url;
     let authorized_method: HttpMethod = http_data.method;
 
@@ -419,22 +422,22 @@ impl TimeDelta {
 #[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
+    use crate::event::Tags;
 
     #[test]
     fn test_nip98_tag_codec() {
-        let url = Nip98Tag::parse(["u", "https://example.com/"]).unwrap();
+        let tag = ["u", "https://example.com/"];
+        let parsed = Nip98Tag::parse(tag).unwrap();
         assert_eq!(
-            url,
+            parsed,
             Nip98Tag::AbsoluteURL(Url::parse("https://example.com/").unwrap())
         );
-        assert_eq!(
-            url.to_tag(),
-            Tag::parse(["u", "https://example.com/"]).unwrap()
-        );
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
-        let method = Nip98Tag::parse(["method", "GET"]).unwrap();
-        assert_eq!(method, Nip98Tag::Method(HttpMethod::GET));
-        assert_eq!(method.to_tag(), Tag::parse(["method", "GET"]).unwrap());
+        let tag = ["method", "GET"];
+        let parsed = Nip98Tag::parse(tag).unwrap();
+        assert_eq!(parsed, Nip98Tag::Method(HttpMethod::GET));
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         let payload_hash = Sha256Hash::from_str(
             "12f8ff0f5f6f023a4ae796a5f5f6d9030434bf2b9bb7a2f4f0f0f971b3e5d79f",
@@ -460,7 +463,7 @@ mod tests {
         )
         .payload(payload);
 
-        let tags: Vec<Tag> = data.clone().into();
+        let tags: Tags = data.clone().into_event_builder().tags.freeze();
         let parsed = HttpData::try_from(tags).unwrap();
 
         assert_eq!(parsed, data);

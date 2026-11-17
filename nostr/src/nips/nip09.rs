@@ -9,8 +9,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use super::nip01::Coordinate;
-use crate::event::{EventBuilder, EventId, IntoEventBuilder, Kind, Tag};
+use super::nip01::{Coordinate, Nip01Tag};
+use crate::event::{EventBuilder, EventId, IntoEventBuilder, Kind};
 
 /// Event deletion request
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -77,19 +77,22 @@ impl EventDeletionRequest {
 
 impl IntoEventBuilder for EventDeletionRequest {
     fn into_event_builder(self) -> EventBuilder {
-        let mut tags: Vec<Tag> = Vec::with_capacity(self.ids.len() + self.coordinates.len());
+        let mut builder: EventBuilder =
+            EventBuilder::new(Kind::EventDeletion).content(self.reason.unwrap_or_default());
+
+        builder
+            .tags
+            .reserve(self.ids.len() + self.coordinates.len());
 
         for id in self.ids.into_iter() {
-            tags.push(Tag::event(id));
+            builder.tags.push(Nip01Tag::event(id));
         }
 
         for coordinate in self.coordinates.into_iter() {
-            tags.push(Tag::coordinate(coordinate, None));
+            builder.tags.push(Nip01Tag::coordinate(coordinate));
         }
 
-        EventBuilder::new(Kind::EventDeletion)
-            .content(self.reason.unwrap_or_default())
-            .tags(tags)
+        builder
     }
 }
 

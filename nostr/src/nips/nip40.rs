@@ -6,11 +6,7 @@
 //!
 //! <https://github.com/nostr-protocol/nips/blob/master/40.md>
 
-use alloc::string::{String, ToString};
-use alloc::vec;
-use alloc::vec::Vec;
-
-use crate::event::{Tag, impl_tag_codec_conversions};
+use crate::event::impl_tag_codec_conversions;
 use crate::nips::util::{missing_tag_kind, take_timestamp, unknown_tag};
 use crate::types::time::Timestamp;
 
@@ -44,15 +40,18 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
+    fn write(self, tx) {
         let Self::Expiration(timestamp) = self;
-        let tag: Vec<String> = vec![String::from(EXPIRATION), timestamp.to_string()];
-        Tag::new(tag)
+        tx.push_str(EXPIRATION);
+        tx.push_u64(timestamp.as_secs());
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::{String, ToString};
+    use alloc::vec::Vec;
+
     use super::*;
     use crate::error::ErrorKind;
 
@@ -79,7 +78,6 @@ mod tests {
         let tag = vec!["expiration".to_string(), raw.to_string()];
         let parsed = Nip40Tag::parse(&tag).unwrap();
         assert_eq!(parsed, Nip40Tag::Expiration(timestamp));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
 
         // Invalid timestamp
         let tag = vec!["expiration", "hello"];

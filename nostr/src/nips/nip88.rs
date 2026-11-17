@@ -6,7 +6,7 @@
 //!
 //! <https://github.com/nostr-protocol/nips/blob/master/88.md>
 
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 use core::str::FromStr;
@@ -17,8 +17,9 @@ use super::util::{
 };
 use crate::error::{Error, ErrorKind};
 use crate::event::{
-    Event, EventBuilder, EventId, IntoEventBuilder, Kind, Tag, impl_tag_codec_conversions,
+    Event, EventBuilder, EventId, IntoEventBuilder, Kind, impl_tag_codec_conversions,
 };
+use crate::nips::nip01::Nip01Tag;
 use crate::types::{RelayUrl, Timestamp};
 
 const ENDS_AT: &str = "endsAt";
@@ -123,22 +124,28 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
+    fn write(self, tx) {
         match self {
-            Self::PollOption(option) => Tag::new(vec![
-                String::from(POLL_OPTION),
-                option.id.clone(),
-                option.text.clone(),
-            ]),
+            Self::PollOption(option) => {
+                tx.push_str(POLL_OPTION);
+                tx.push_str(&option.id);
+                tx.push_str(&option.text);
+            }
             Self::PollResponse(response) => {
-                Tag::new(vec![String::from(POLL_RESPONSE), response.clone()])
+                tx.push_str(POLL_RESPONSE);
+                tx.push_str(&response);
             }
             Self::PollType(poll_type) => {
-                Tag::new(vec![String::from(POLL_TYPE), poll_type.to_string()])
+                tx.push_str(POLL_TYPE);
+                tx.push_str(poll_type.as_str());
             }
-            Self::Relay(relay) => Tag::new(vec![String::from(RELAY), relay.to_string()]),
+            Self::Relay(relay) => {
+                tx.push_str(RELAY);
+                tx.push_str(relay.as_str());
+            }
             Self::PollEndsAt(timestamp) => {
-                Tag::new(vec![String::from(ENDS_AT), timestamp.to_string()])
+                tx.push_str(ENDS_AT);
+                tx.push_u64(timestamp.as_secs());
             }
         }
     }
@@ -198,23 +205,27 @@ impl Poll {
 
 impl IntoEventBuilder for Poll {
     fn into_event_builder(self) -> EventBuilder {
-        let mut tags: Vec<Tag> = Vec::with_capacity(1 + self.options.len() + self.relays.len());
+        let mut builder: EventBuilder = EventBuilder::new(Kind::Poll).content(self.title);
 
-        tags.push(Nip88Tag::PollType(self.r#type).to_tag());
+        builder
+            .tags
+            .reserve(1 + self.options.len() + self.relays.len());
 
-        for option in self.options.into_iter() {
-            tags.push(Nip88Tag::PollOption(option).to_tag());
+        builder.tags.push(Nip88Tag::PollType(self.r#type));
+
+        for option in self.options {
+            builder.tags.push(Nip88Tag::PollOption(option));
         }
 
-        for url in self.relays.into_iter() {
-            tags.push(Nip88Tag::Relay(url).to_tag());
+        for url in self.relays {
+            builder.tags.push(Nip88Tag::Relay(url));
         }
 
         if let Some(timestamp) = self.ends_at {
-            tags.push(Nip88Tag::PollEndsAt(timestamp).to_tag());
+            builder.tags.push(Nip88Tag::PollEndsAt(timestamp));
         }
 
-        EventBuilder::new(Kind::Poll).content(self.title).tags(tags)
+        builder
     }
 }
 
@@ -238,33 +249,35 @@ pub enum PollResponse {
 }
 impl IntoEventBuilder for PollResponse {
     fn into_event_builder(self) -> EventBuilder {
-        let tags: Vec<Tag> = match self {
+        let mut builder: EventBuilder = EventBuilder::new(Kind::PollResponse);
+
+        match self {
             Self::SingleChoice { poll_id, response } => {
-                vec![
-                    Tag::event(poll_id),
-                    Nip88Tag::PollResponse(response).to_tag(),
-                ]
+                builder.tags.reserve(2);
+                builder.tags.push(Nip01Tag::event(poll_id));
+                builder.tags.push(Nip88Tag::PollResponse(response));
             }
             Self::MultipleChoice { poll_id, responses } => {
-                let mut tags: Vec<Tag> = Vec::with_capacity(1 + responses.len());
+                builder.tags.reserve(1 + responses.len());
 
-                tags.push(Tag::event(poll_id));
+                builder.tags.push(Nip01Tag::event(poll_id));
 
-                for response in responses.into_iter() {
-                    tags.push(Nip88Tag::PollResponse(response).to_tag());
+                for response in responses {
+                    builder.tags.push(Nip88Tag::PollResponse(response));
                 }
-
-                tags
             }
         };
 
-        EventBuilder::new(Kind::PollResponse).tags(tags)
+        builder
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::ToString;
+
     use super::*;
+    use crate::event::Tags;
 
     #[test]
     fn test_poll_type() {
@@ -295,23 +308,23 @@ mod tests {
             })
         );
         assert_eq!(
-            option.to_tag(),
-            Tag::parse(["option", "qj518h583", "Yay"]).unwrap()
+            Tags::from_iter([option]),
+            Tags::parse([["option", "qj518h583", "Yay"]]).unwrap()
         );
 
         let poll_type = Nip88Tag::parse(["polltype", "multiplechoice"]).unwrap();
         assert_eq!(poll_type, Nip88Tag::PollType(PollType::MultipleChoice));
         assert_eq!(
-            poll_type.to_tag(),
-            Tag::parse(["polltype", "multiplechoice"]).unwrap()
+            Tags::from_iter([poll_type]),
+            Tags::parse([["polltype", "multiplechoice"]]).unwrap()
         );
 
         let relay = RelayUrl::parse("wss://relay.damus.io").unwrap();
         let relay_tag = Nip88Tag::parse(["relay", "wss://relay.damus.io"]).unwrap();
         assert_eq!(relay_tag, Nip88Tag::Relay(relay.clone()));
         assert_eq!(
-            relay_tag.to_tag(),
-            Tag::parse(["relay", relay.as_str()]).unwrap()
+            Tags::from_iter([relay_tag]),
+            Tags::parse([["relay", relay.as_str()]]).unwrap()
         );
 
         let ends_at = Nip88Tag::parse(["endsAt", "1788888888"]).unwrap();
@@ -320,15 +333,15 @@ mod tests {
             Nip88Tag::PollEndsAt(Timestamp::from_secs(1788888888))
         );
         assert_eq!(
-            ends_at.to_tag(),
-            Tag::parse(["endsAt", "1788888888"]).unwrap()
+            Tags::from_iter([ends_at]),
+            Tags::parse([["endsAt", "1788888888"]]).unwrap()
         );
 
         let response = Nip88Tag::parse(["response", "qj518h583"]).unwrap();
         assert_eq!(response, Nip88Tag::PollResponse("qj518h583".to_string()));
         assert_eq!(
-            response.to_tag(),
-            Tag::parse(["response", "qj518h583"]).unwrap()
+            Tags::from_iter([response]),
+            Tags::parse([["response", "qj518h583"]]).unwrap()
         );
     }
 

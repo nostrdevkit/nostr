@@ -6,12 +6,10 @@
 //!
 //! <https://github.com/nostr-protocol/nips/blob/master/B7.md>
 
-use alloc::string::{String, ToString};
-use alloc::vec;
 use alloc::vec::Vec;
 
 use super::util::{missing_tag_kind, take_and_parse_from_str, unknown_tag};
-use crate::event::{EventBuilder, IntoEventBuilder, Kind, Tag, impl_tag_codec_conversions};
+use crate::event::{EventBuilder, IntoEventBuilder, Kind, impl_tag_codec_conversions};
 use crate::types::url::Url;
 
 const SERVER: &str = "server";
@@ -65,18 +63,18 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
-        match self {
-            Self::Server(server_url) => {
-                Tag::new(vec![String::from(SERVER), server_url.to_string()])
-            }
-        }
+    fn write(self, tx) {
+        let Self::Server(server_url) = self;
+
+        tx.push_str(SERVER);
+        tx.push_str(server_url.as_str());
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::Tags;
 
     #[test]
     fn test_server_tag() {
@@ -87,6 +85,6 @@ mod tests {
             parsed,
             NipB7Tag::Server(Url::parse("https://blossom.example.com").unwrap())
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 }

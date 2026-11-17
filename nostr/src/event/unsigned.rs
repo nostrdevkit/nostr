@@ -14,7 +14,7 @@ use secp256k1::{Secp256k1, Verification};
 
 use super::signature::Signature;
 use super::{
-    AsyncSignEvent, Event, EventId, FinalizeEvent, FinalizeEventAsync, Kind, SignEvent, Tag, Tags,
+    AsyncSignEvent, Event, EventId, FinalizeEvent, FinalizeEventAsync, Kind, SignEvent, Tags,
 };
 use crate::error::{Error, ErrorKind};
 use crate::key::PublicKey;
@@ -57,7 +57,7 @@ impl UnsignedEvent {
         content: S,
     ) -> Self
     where
-        I: IntoIterator<Item = Tag>,
+        I: Into<Tags>,
         S: Into<String>,
     {
         Self {
@@ -65,7 +65,7 @@ impl UnsignedEvent {
             pubkey: public_key,
             created_at,
             kind,
-            tags: Tags::from_list(tags.into_iter().collect()),
+            tags: tags.into(),
             content: content.into(),
         }
     }

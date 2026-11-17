@@ -7,10 +7,9 @@
 //! <https://github.com/nostr-protocol/nips/blob/master/32.md>
 
 use alloc::string::String;
-use alloc::vec;
 
 use super::util::{missing_tag_kind, take_string, unknown_tag};
-use crate::event::{EventBuilder, IntoEventBuilder, Kind, Tag, impl_tag_codec_conversions};
+use crate::event::{EventBuilder, IntoEventBuilder, Kind, impl_tag_codec_conversions};
 
 /// Label event.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -35,14 +34,12 @@ impl Label {
 
 impl IntoEventBuilder for Label {
     fn into_event_builder(self) -> EventBuilder {
-        EventBuilder::new(Kind::Label).tags([
-            Nip32Tag::LabelNamespace(self.namespace.clone()).to_tag(),
-            Nip32Tag::Label {
+        EventBuilder::new(Kind::Label)
+            .tag(Nip32Tag::LabelNamespace(self.namespace.clone()))
+            .tag(Nip32Tag::Label {
                 value: self.value,
                 namespace: self.namespace,
-            }
-            .to_tag(),
-        ])
+            })
     }
 }
 
@@ -84,11 +81,16 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
+    fn write(self, tx) {
         match self {
-            Self::LabelNamespace(namespace) => Tag::new(vec![String::from("L"), namespace.clone()]),
+            Self::LabelNamespace(namespace) => {
+                tx.push_str("L");
+                tx.push_str(&namespace);
+            }
             Self::Label { value, namespace } => {
-                Tag::new(vec![String::from("l"), value.clone(), namespace.clone()])
+                tx.push_str("l");
+                tx.push_str(&value);
+                tx.push_str(&namespace);
             }
         }
     }
@@ -97,13 +99,14 @@ impl_tag_codec_conversions! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::Tags;
 
     #[test]
     fn test_parse_label_namespace_tag() {
         let tag = vec!["L", "test"];
         let parsed = Nip32Tag::parse(&tag).unwrap();
         assert_eq!(parsed, Nip32Tag::LabelNamespace(String::from("test")));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -117,7 +120,7 @@ mod tests {
                 namespace: String::from("test")
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -126,8 +129,10 @@ mod tests {
 
         assert_eq!(builder.kind, Kind::Label);
         assert_eq!(builder.tags.len(), 2);
+
+        let tags: Tags = builder.tags.into();
         assert_eq!(
-            Nip32Tag::try_from(&builder.tags[1]).unwrap(),
+            Nip32Tag::try_from(tags.get(1).unwrap()).unwrap(),
             Nip32Tag::Label {
                 value: String::from("value"),
                 namespace: String::from("namespace"),

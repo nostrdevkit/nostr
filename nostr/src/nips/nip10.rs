@@ -6,18 +6,18 @@
 //!
 //! <https://github.com/nostr-protocol/nips/blob/master/10.md>
 
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
+use alloc::string::String;
 use core::fmt;
 use core::str::FromStr;
 
+use super::nip01::Nip01Tag;
 use super::util::{
     missing_tag_kind, take_and_parse_optional_public_key, take_and_parse_optional_relay_url,
     take_event_id, unknown_tag,
 };
 use crate::error::{Error, ErrorKind};
 use crate::event::{
-    Event, EventBuilder, EventId, IntoEventBuilder, Kind, Tag, impl_tag_codec_conversions,
+    Event, EventBuilder, EventId, IntoEventBuilder, Kind, impl_tag_codec_conversions,
 };
 use crate::key::PublicKey;
 use crate::types::url::RelayUrl;
@@ -64,51 +64,44 @@ impl<'a> TextNoteReplyBuilder<'a> {
 
 impl IntoEventBuilder for TextNoteReplyBuilder<'_> {
     fn into_event_builder(self) -> EventBuilder {
-        let mut tags: Vec<Tag> = Vec::with_capacity(4);
+        let mut builder: EventBuilder = EventBuilder::new(Kind::TextNote).content(self.content);
 
         match self.root {
             Some(root) => {
                 if root.id != self.reply_to.id {
-                    tags.push(
-                        Nip10Tag::Event {
-                            id: self.reply_to.id,
-                            relay_hint: self.relay_hint.clone(),
-                            marker: Some(Marker::Reply),
-                            public_key: Some(self.reply_to.pubkey),
-                        }
-                        .to_tag(),
-                    );
-                    tags.push(Tag::public_key(self.reply_to.pubkey));
-                }
-
-                tags.push(
-                    Nip10Tag::Event {
-                        id: root.id,
-                        relay_hint: self.relay_hint,
-                        marker: Some(Marker::Root),
-                        public_key: Some(root.pubkey),
-                    }
-                    .to_tag(),
-                );
-                tags.push(Tag::public_key(root.pubkey));
-            }
-            None => {
-                tags.push(
-                    Nip10Tag::Event {
+                    builder.tags.push(Nip10Tag::Event {
                         id: self.reply_to.id,
-                        relay_hint: self.relay_hint,
+                        relay_hint: self.relay_hint.clone(),
                         marker: Some(Marker::Reply),
                         public_key: Some(self.reply_to.pubkey),
-                    }
-                    .to_tag(),
-                );
-                tags.push(Tag::public_key(self.reply_to.pubkey));
+                    });
+                    builder
+                        .tags
+                        .push(Nip01Tag::public_key(self.reply_to.pubkey));
+                }
+
+                builder.tags.push(Nip10Tag::Event {
+                    id: root.id,
+                    relay_hint: self.relay_hint,
+                    marker: Some(Marker::Root),
+                    public_key: Some(root.pubkey),
+                });
+                builder.tags.push(Nip01Tag::public_key(root.pubkey));
+            }
+            None => {
+                builder.tags.push(Nip10Tag::Event {
+                    id: self.reply_to.id,
+                    relay_hint: self.relay_hint,
+                    marker: Some(Marker::Reply),
+                    public_key: Some(self.reply_to.pubkey),
+                });
+                builder
+                    .tags
+                    .push(Nip01Tag::public_key(self.reply_to.pubkey));
             }
         }
 
-        EventBuilder::new(Kind::TextNote)
-            .content(self.content)
-            .tags(tags)
+        builder
     }
 }
 
@@ -123,12 +116,18 @@ pub enum Marker {
     Reply,
 }
 
+impl Marker {
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Root => "root",
+            Self::Reply => "reply",
+        }
+    }
+}
+
 impl fmt::Display for Marker {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Root => f.write_str("root"),
-            Self::Reply => f.write_str("reply"),
-        }
+        f.write_str(self.as_str())
     }
 }
 
@@ -211,7 +210,7 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
+    fn write(self, tx) {
         match self {
             Self::Event {
                 id,
@@ -224,33 +223,25 @@ impl_tag_codec_conversions! {
                 // <relay-url>, if empty, may be set to "" (if there are additional fields later)
                 // <marker> is optional and if present is one of "reply" or "root" (so not an empty string)
 
-                let mut tag: Vec<String> = Vec::with_capacity(
-                    2 + relay_hint.is_some() as usize
-                        + marker.is_some() as usize
-                        + public_key.is_some() as usize,
-                );
-
-                tag.push(String::from(EVENT));
-                tag.push(id.to_hex());
+                tx.push_str(EVENT);
+                tx.push_hex(id.as_bytes());
 
                 // Check if relay hint exists or if there are additional fields after
                 match (relay_hint, marker.is_some() || public_key.is_some()) {
-                    (Some(relay_hint), ..) => tag.push(relay_hint.to_string()),
-                    (None, true) => tag.push(String::new()),
+                    (Some(relay_hint), ..) => tx.push_str(relay_hint.as_str()),
+                    (None, true) => tx.push_str(""),
                     (None, false) => {}
                 }
 
                 match (marker, public_key.is_some()) {
-                    (Some(marker), _) => tag.push(marker.to_string()),
-                    (None, true) => tag.push(String::new()),
+                    (Some(marker), _) => tx.push_str(marker.as_str()),
+                    (None, true) => tx.push_str(""),
                     (None, false) => {}
                 }
 
                 if let Some(public_key) = public_key {
-                    tag.push(public_key.to_hex());
+                    tx.push_hex(public_key.as_bytes());
                 }
-
-                Tag::new(tag)
             }
         }
     }
@@ -287,9 +278,13 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::ToString;
+    use alloc::vec::Vec;
+
     use super::*;
     #[cfg(all(feature = "std", feature = "os-rng"))]
     use crate::event::FinalizeEvent;
+    use crate::event::Tags;
     #[cfg(all(feature = "std", feature = "os-rng"))]
     use crate::key::Keys;
     use crate::key::PublicKey;
@@ -334,7 +329,7 @@ mod tests {
         );
         assert!(parsed.is_root());
         assert!(!parsed.is_reply());
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -351,7 +346,7 @@ mod tests {
                 public_key: None,
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -377,7 +372,7 @@ mod tests {
                 public_key: Some(public_key),
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]

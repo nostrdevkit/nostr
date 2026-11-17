@@ -22,11 +22,11 @@ use serde_json::Value;
 use super::util::{invalid_uri, unexpected_result, unsupported_method};
 use super::{nip04, nip44};
 use crate::error::{Error, ErrorKind};
+use crate::event::impl_tag_codec_conversions;
 #[cfg(feature = "std")]
 use crate::event::{Event, Kind};
 #[cfg(all(feature = "std", feature = "os-rng"))]
 use crate::event::{EventBuilder, FinalizeEvent};
-use crate::event::{Tag, impl_tag_codec_conversions};
 #[cfg(all(feature = "std", feature = "os-rng"))]
 use crate::key::Keys;
 use crate::key::{PublicKey, SecretKey};
@@ -346,10 +346,11 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
-        match self {
-            Nip47Tag::Encryption(et) => Tag::new(vec![String::from(ENCRYPTION), et.to_string()]),
-        }
+    fn write(self, tx) {
+        let Self::Encryption(encryption) = self;
+
+        tx.push_str(ENCRYPTION);
+        tx.push_str(&encryption.to_string());
     }
 }
 
@@ -909,8 +910,8 @@ impl Request {
     ) -> Result<Event, Error> {
         let latest = cipher.latest();
         let encrypted = latest.encrypt(&uri.secret, &uri.public_key, &self.as_json())?;
-        let encryption_tag = if latest == Nip47Ciphers::NIP44V2 {
-            Some(Nip47Tag::Encryption(latest).to_tag())
+        let encryption_tag: Option<Nip47Tag> = if latest == Nip47Ciphers::NIP44V2 {
+            Some(Nip47Tag::Encryption(latest))
         } else {
             None
         };
@@ -2244,42 +2245,33 @@ mod tests {
 
     #[test]
     fn test_encryption_tag_parsing() {
-        let tag = Tag::new(vec![String::from("encryption"), String::from("")]);
+        let tag = &["encryption", ""];
         assert!(Nip47Tag::parse(tag).is_err());
 
-        let tag = Tag::new(vec![String::from("encryption"), String::from("  ")]);
+        let tag = &["encryption", "  "];
         assert!(Nip47Tag::parse(tag).is_err());
 
-        let tag = Tag::new(vec![String::from("encryption"), String::from("nip44_v2")]);
+        let tag = &["encryption", "nip44_v2"];
         assert_eq!(
             Nip47Tag::parse(tag).unwrap(),
             Nip47Tag::Encryption(Nip47Ciphers::NIP44V2),
         );
 
-        let tag = Tag::new(vec![
-            String::from("encryption"),
-            String::from("nip44_v2 nip04"),
-        ]);
+        let tag = &["encryption", "nip44_v2 nip04"];
         assert_eq!(
             Nip47Tag::parse(tag).unwrap(),
             Nip47Tag::Encryption(Nip47Ciphers::NIP44V2.add(Nip47Ciphers::NIP04)),
         );
 
         // Ignore unknown ciphers
-        let tag = Tag::new(vec![
-            String::from("encryption"),
-            String::from("nip44_v2  nip04 new_cipher"),
-        ]);
+        let tag = &["encryption", "nip44_v2  nip04 new_cipher"];
         assert_eq!(
             Nip47Tag::parse(tag).unwrap(),
             Nip47Tag::Encryption(Nip47Ciphers::NIP44V2.add(Nip47Ciphers::NIP04)),
         );
 
         // error if no known cipher
-        let tag = Tag::new(vec![
-            String::from("encryption"),
-            String::from("new_cipher new_cipher_v2"),
-        ]);
+        let tag = &["encryption", "new_cipher new_cipher_v2"];
         assert!(Nip47Tag::parse(tag).is_err());
     }
 
@@ -2297,8 +2289,8 @@ mod tests {
 
         // With `encryption` tag
         assert_eq!(
-            Nip47Tag::Encryption(Nip47Ciphers::NIP44V2).to_tag(),
-            Tag::new(vec![String::from("encryption"), String::from("nip44_v2")]),
+            Nip47Tag::Encryption(Nip47Ciphers::NIP44V2),
+            Nip47Tag::parse(["encryption", "nip44_v2"]).unwrap(),
         );
     }
 

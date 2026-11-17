@@ -480,10 +480,10 @@ mod tests {
         let build_response = |e_tag: Option<EventId>, p_tag: Option<PublicKey>| {
             let mut builder = EventBuilder::new(Kind::WalletConnectResponse);
             if let Some(id) = e_tag {
-                builder = builder.tag(Tag::event(id));
+                builder = builder.tag(id);
             }
             if let Some(pubkey) = p_tag {
-                builder = builder.tag(Tag::public_key(pubkey));
+                builder = builder.tag(pubkey);
             }
             builder.finalize(&wallet_keys).unwrap()
         };
@@ -577,8 +577,8 @@ mod tests {
             .unwrap();
         let response_event = EventBuilder::new(Kind::WalletConnectResponse)
             .content(enc_response)
-            .tag(Tag::public_key(ckeys.public_key()))
-            .tag(Tag::event(request.id))
+            .tag(ckeys.public_key())
+            .tag(request.id)
             .finalize(&wkeys)
             .unwrap();
         client.send_event(&response_event).await.unwrap();
@@ -837,7 +837,7 @@ mod tests {
                 .unwrap();
             let event = EventBuilder::new(kind)
                 .content(content)
-                .tag(Tag::public_key(ckeys.public_key()))
+                .tag(ckeys.public_key())
                 .finalize(&wkeys)
                 .unwrap();
             wallet.send_event(&event).await.unwrap();

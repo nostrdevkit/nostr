@@ -277,9 +277,9 @@ fn ndb_note_to_event(note: Note) -> Result<Event, Error> {
     ))
 }
 
-fn ndb_note_to_tags<'a>(note: &Note<'a>) -> Result<Vec<Tag>, Error> {
+fn ndb_note_to_tags<'a>(note: &Note<'a>) -> Result<Tags, Error> {
     let ndb_tags = note.tags();
-    let mut tags: Vec<Tag> = Vec::with_capacity(ndb_tags.count() as usize);
+    let mut tags: TagsMut = TagsMut::with_capacity(ndb_tags.count() as usize);
     for tag in ndb_tags.iter() {
         let tag_str: Vec<Cow<'a, str>> = tag
             .into_iter()
@@ -288,10 +288,9 @@ fn ndb_note_to_tags<'a>(note: &Note<'a>) -> Result<Vec<Tag>, Error> {
                 NdbStrVariant::Str(s) => Cow::Borrowed(s),
             })
             .collect();
-        let tag = Tag::parse(tag_str)?;
-        tags.push(tag);
+        tags.push(tag_str);
     }
-    Ok(tags)
+    Ok(tags.freeze())
 }
 
 fn ndb_note_to_neg_item(note: Note) -> (EventId, Timestamp) {

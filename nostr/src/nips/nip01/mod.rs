@@ -22,7 +22,7 @@ pub use self::tags::*;
 use super::nip19::{self, FromBech32, Nip19Coordinate, ToBech32};
 use super::nip21::{FromNostrUri, ToNostrUri};
 use crate::error::{Error, ErrorKind};
-use crate::event::{EventBuilder, IntoEventBuilder, Kind, Tag};
+use crate::event::{EventBuilder, IntoEventBuilder, Kind, TagWriter, WriteTag};
 use crate::filter::Filter;
 use crate::key::PublicKey;
 use crate::types::url::Url;
@@ -155,9 +155,15 @@ fn verify_coordinate(kind: &Kind, identifier: &str) -> Result<(), Error> {
     Ok(())
 }
 
-impl From<Coordinate> for Tag {
+impl WriteTag for Coordinate {
+    fn write(self, tx: &mut TagWriter<'_>) {
+        Nip01Tag::coordinate(self).write(tx)
+    }
+}
+
+impl From<Coordinate> for Nip01Tag {
     fn from(coordinate: Coordinate) -> Self {
-        Self::coordinate(coordinate, None)
+        Self::coordinate(coordinate)
     }
 }
 

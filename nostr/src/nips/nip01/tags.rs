@@ -1,13 +1,11 @@
 use alloc::string::{String, ToString};
-use alloc::vec;
-use alloc::vec::Vec;
 
 use super::super::util::{
     missing_tag_kind, take_and_parse_optional_public_key, take_and_parse_optional_relay_url,
     take_coordinate, take_event_id, take_public_key, take_string, unknown_tag,
 };
 use super::{Coordinate, Error};
-use crate::event::{EventId, Tag, impl_tag_codec_conversions};
+use crate::event::{EventId, TagWriter, impl_tag_codec_conversions};
 use crate::key::PublicKey;
 use crate::types::RelayUrl;
 
@@ -41,6 +39,45 @@ pub enum Nip01Tag {
         /// Relay hint (optional but recommended)
         relay_hint: Option<RelayUrl>,
     },
+}
+
+impl Nip01Tag {
+    /// New "a" tag
+    #[inline]
+    pub fn coordinate(coordinate: Coordinate) -> Self {
+        Self::Coordinate {
+            coordinate,
+            relay_hint: None,
+        }
+    }
+
+    /// New "e" tag
+    #[inline]
+    pub fn event(id: EventId) -> Self {
+        Self::Event {
+            id,
+            relay_hint: None,
+            public_key: None,
+        }
+    }
+
+    /// New "d" tag
+    #[inline]
+    pub fn identifier<T>(identifier: T) -> Self
+    where
+        T: Into<String>,
+    {
+        Self::Identifier(identifier.into())
+    }
+
+    /// New "p" tag
+    #[inline]
+    pub fn public_key(public_key: PublicKey) -> Self {
+        Self::PublicKey {
+            public_key,
+            relay_hint: None,
+        }
+    }
 }
 
 impl_tag_codec_conversions! {
@@ -81,24 +118,25 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
+    fn write(self, tx) {
         match self {
             Self::Coordinate {
                 coordinate,
                 relay_hint,
-            } => serialize_a_tag(coordinate, relay_hint.as_ref()),
+            } => serialize_a_tag(tx, false, &coordinate, relay_hint.as_ref()),
             Self::Event {
                 id,
                 relay_hint,
                 public_key,
-            } => serialize_e_tag(id, relay_hint.as_ref(), public_key.as_ref()),
+            } => serialize_e_tag(tx, false, &id, relay_hint.as_ref(), public_key.as_ref()),
             Self::Identifier(identifier) => {
-                Tag::new(vec![String::from("d"), identifier.to_string()])
+                tx.push_str("d");
+                tx.push_str(&identifier);
             }
             Self::PublicKey {
                 public_key,
                 relay_hint,
-            } => serialize_p_tag(public_key, relay_hint.as_ref()),
+            } => serialize_p_tag(tx, false, &public_key, relay_hint.as_ref()),
         }
     }
 }
@@ -117,19 +155,19 @@ where
 }
 
 pub(in super::super) fn serialize_a_tag(
+    tx: &mut TagWriter,
+    uppercase: bool,
     coordinate: &Coordinate,
     relay_hint: Option<&RelayUrl>,
-) -> Tag {
-    let mut tag: Vec<String> = Vec::with_capacity(2 + relay_hint.is_some() as usize);
+) {
+    tx.reserve(2 + relay_hint.is_some() as usize);
 
-    tag.push(String::from("a"));
-    tag.push(coordinate.to_string());
+    tx.push_str(if uppercase { "A" } else { "a" });
+    tx.push_str(&coordinate.to_string());
 
     if let Some(relay_hint) = relay_hint {
-        tag.push(relay_hint.to_string());
+        tx.push_str(relay_hint.as_str());
     }
-
-    Tag::new(tag)
 }
 
 pub(in super::super) fn parse_e_tag<T, S>(
@@ -147,27 +185,26 @@ where
 }
 
 pub(in super::super) fn serialize_e_tag(
+    tx: &mut TagWriter,
+    uppercase: bool,
     id: &EventId,
     relay_hint: Option<&RelayUrl>,
     public_key: Option<&PublicKey>,
-) -> Tag {
-    let mut tag: Vec<String> =
-        Vec::with_capacity(2 + relay_hint.is_some() as usize + public_key.is_some() as usize);
+) {
+    tx.reserve(2 + relay_hint.is_some() as usize + public_key.is_some() as usize);
 
-    tag.push(String::from("e"));
-    tag.push(id.to_hex());
+    tx.push_str(if uppercase { "E" } else { "e" });
+    tx.push_hex(id.as_bytes());
 
     if let Some(relay_hint) = relay_hint {
-        tag.push(relay_hint.to_string());
+        tx.push_str(relay_hint.as_str());
     } else if public_key.is_some() {
-        tag.push(String::new());
+        tx.push_str("");
     }
 
     if let Some(public_key) = public_key {
-        tag.push(public_key.to_string());
+        tx.push_hex(public_key.as_bytes());
     }
-
-    Tag::new(tag)
 }
 
 pub(in super::super) fn parse_p_tag<T, S>(
@@ -184,25 +221,26 @@ where
 }
 
 pub(in super::super) fn serialize_p_tag(
+    tx: &mut TagWriter,
+    uppercase: bool,
     public_key: &PublicKey,
     relay_hint: Option<&RelayUrl>,
-) -> Tag {
-    let mut tag: Vec<String> = Vec::with_capacity(2 + relay_hint.is_some() as usize);
+) {
+    tx.reserve(2 + relay_hint.is_some() as usize);
 
-    tag.push(String::from("p"));
-    tag.push(public_key.to_hex());
+    tx.push_str(if uppercase { "P" } else { "p" });
+    tx.push_hex(public_key.as_bytes());
 
     if let Some(relay_hint) = relay_hint {
-        tag.push(relay_hint.to_string());
+        tx.push_str(relay_hint.as_str());
     }
-
-    Tag::new(tag)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::error::ErrorKind;
+    use crate::event::Tags;
 
     #[test]
     fn test_standardized_a_tag() {
@@ -219,7 +257,7 @@ mod tests {
                 relay_hint: None
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         // With relay hint
         let tag = vec!["a", raw, "wss://relay.damus.io/"];
@@ -231,7 +269,7 @@ mod tests {
                 relay_hint: Some(RelayUrl::parse("wss://relay.damus.io/").unwrap())
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         // Invalid coordinate
         let tag = vec!["a", "hello"];
@@ -260,7 +298,7 @@ mod tests {
                 public_key: None
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         // With relay hint
         let tag = vec!["e", raw, "wss://relay.damus.io/"];
@@ -273,7 +311,7 @@ mod tests {
                 public_key: None
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         // With relay hint and public key
         let tag = vec![
@@ -296,7 +334,7 @@ mod tests {
                 )
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         // With public key and no relay hint
         let tag = vec![
@@ -319,7 +357,7 @@ mod tests {
                 )
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         // Invalid ID
         let tag = vec!["e", "hello"];
@@ -348,7 +386,7 @@ mod tests {
         let tag = vec!["d", "raw"];
         let parsed = Nip01Tag::parse(&tag).unwrap();
         assert_eq!(parsed, Nip01Tag::Identifier(String::from("raw")));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         // Missing identifier
         let tag = vec!["d"];
@@ -371,7 +409,7 @@ mod tests {
                 relay_hint: None
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         // With relay hint
         let tag = vec!["p", raw, "wss://relay.damus.io/"];
@@ -383,7 +421,7 @@ mod tests {
                 relay_hint: Some(RelayUrl::parse("wss://relay.damus.io/").unwrap())
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         // Invalid public key
         let tag = vec!["p", "hello"];
@@ -402,56 +440,57 @@ mod benches {
     use test::{Bencher, black_box};
 
     use super::*;
+    use crate::event::TagsMut;
 
+    /// Compose the tag and pack it, reusing the same packer.
     #[bench]
-    pub fn nip01_a_to_tag(bh: &mut Bencher) {
-        let coordinate = Coordinate::from_kpi_format(
-            "30617:00000001505e7e48927046e9bbaa728b1f3b511227e2200c578d6e6bb0c77eb9:n34",
-        )
-        .unwrap();
-        let tag: Nip01Tag = Nip01Tag::Coordinate {
-            coordinate,
-            relay_hint: None,
-        };
+    pub fn nip01_a_to_tags(bh: &mut Bencher) {
+        let mut tags: TagsMut = TagsMut::with_capacity(1);
         bh.iter(|| {
-            let tag: Tag = (&tag).into();
-            black_box(tag);
+            tags.clear();
+            tags.push(Nip01Tag::Coordinate {
+                coordinate: Coordinate::from_kpi_format(
+                    "30617:00000001505e7e48927046e9bbaa728b1f3b511227e2200c578d6e6bb0c77eb9:n34",
+                )
+                .unwrap(),
+                relay_hint: None,
+            });
+            black_box(tags.freeze());
         });
     }
 
+    /// Compose the tag and pack it, reusing the same packer.
     #[bench]
-    pub fn nip01_d_to_tag(bh: &mut Bencher) {
-        let tag: Nip01Tag = Nip01Tag::Identifier(String::from("test"));
+    pub fn nip01_d_to_tags(bh: &mut Bencher) {
+        let mut tags: TagsMut = TagsMut::with_capacity(1);
         bh.iter(|| {
-            let tag: Tag = (&tag).into();
-            black_box(tag);
+            tags.clear();
+            tags.push(Nip01Tag::identifier("test"));
+            black_box(tags.freeze());
         });
     }
 
+    /// Compose the tag and pack it, reusing the same packer.
     #[bench]
-    pub fn nip01_e_to_tag(bh: &mut Bencher) {
+    pub fn nip01_e_to_tags(bh: &mut Bencher) {
         let id = EventId::all_zeros();
-        let tag: Nip01Tag = Nip01Tag::Event {
-            id,
-            relay_hint: None,
-            public_key: None,
-        };
+        let mut tags: TagsMut = TagsMut::with_capacity(1);
         bh.iter(|| {
-            let tag: Tag = (&tag).into();
-            black_box(tag);
+            tags.clear();
+            tags.push(Nip01Tag::event(id));
+            black_box(tags.freeze());
         });
     }
 
+    /// Compose the tag and pack it, reusing the same packer.
     #[bench]
-    pub fn nip01_p_to_tag(bh: &mut Bencher) {
+    pub fn nip01_p_to_tags(bh: &mut Bencher) {
         let public_key = PublicKey::from_byte_array([0; 32]);
-        let tag: Nip01Tag = Nip01Tag::PublicKey {
-            public_key,
-            relay_hint: None,
-        };
+        let mut tags: TagsMut = TagsMut::with_capacity(1);
         bh.iter(|| {
-            let tag: Tag = (&tag).into();
-            black_box(tag);
+            tags.clear();
+            tags.push(Nip01Tag::public_key(public_key));
+            black_box(tags.freeze());
         });
     }
 }

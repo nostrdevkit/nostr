@@ -7,10 +7,11 @@
 //! <https://github.com/nostr-protocol/nips/blob/master/38.md>
 
 use alloc::string::{String, ToString};
-use alloc::vec::Vec;
 use core::fmt;
 
-use crate::event::{EventBuilder, IntoEventBuilder, Kind, Tag};
+use super::nip01::Nip01Tag;
+use super::nip40::Nip40Tag;
+use crate::event::{EventBuilder, IntoEventBuilder, Kind};
 use crate::types::Timestamp;
 
 /// NIP38 types
@@ -75,10 +76,11 @@ impl LiveStatusEvent {
 
 impl IntoEventBuilder for LiveStatusEvent {
     fn into_event_builder(self) -> EventBuilder {
-        let tags: Vec<Tag> = self.status.into();
         EventBuilder::new(Kind::UserStatus)
             .content(self.content)
-            .tags(tags)
+            .tag(Nip01Tag::identifier(self.status.status_type.to_string()))
+            .tag_maybe(self.status.expiration.map(Nip40Tag::Expiration))
+            .tag_maybe(self.status.reference.as_ref().map(|r| ["r", r.as_str()]))
     }
 }
 
@@ -91,30 +93,5 @@ impl LiveStatus {
             expiration: None,
             reference: None,
         }
-    }
-}
-
-impl From<LiveStatus> for Vec<Tag> {
-    fn from(
-        LiveStatus {
-            status_type,
-            expiration,
-            reference,
-        }: LiveStatus,
-    ) -> Self {
-        let mut tags =
-            Vec::with_capacity(1 + expiration.is_some() as usize + reference.is_some() as usize);
-
-        tags.push(Tag::identifier(status_type.to_string()));
-
-        if let Some(expire_at) = expiration {
-            tags.push(Tag::expiration(expire_at));
-        }
-
-        if let Some(content) = reference {
-            tags.push(Tag::new(vec![String::from("r"), content]));
-        }
-
-        tags
     }
 }

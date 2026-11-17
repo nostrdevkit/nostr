@@ -5,7 +5,6 @@
 //!
 //! <https://github.com/nostr-protocol/nips/blob/master/66.md>
 
-use alloc::borrow::ToOwned;
 use alloc::string::{String, ToString};
 use core::convert::Infallible;
 use core::fmt;
@@ -14,7 +13,7 @@ use core::time::Duration;
 
 use super::util::{missing_tag_kind, missing_value, take_string, unknown_tag};
 use crate::error::Error;
-use crate::event::{Kind, Tag, impl_tag_codec_conversions};
+use crate::event::{Kind, impl_tag_codec_conversions};
 
 const RTT_OPEN: &str = "rtt-open";
 const RTT_READ: &str = "rtt-read";
@@ -106,37 +105,51 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
+    fn write(self, tx) {
         match self {
             Self::RttOpen(time) => {
-                Tag::new(vec![RTT_OPEN.to_owned(), time.as_millis().to_string()])
+                tx.push_str(RTT_OPEN);
+                tx.push_u128(time.as_millis());
             }
             Self::RttRead(time) => {
-                Tag::new(vec![RTT_READ.to_owned(), time.as_millis().to_string()])
+                tx.push_str(RTT_READ);
+                tx.push_u128(time.as_millis());
             }
             Self::RttWrite(time) => {
-                Tag::new(vec![RTT_WRITE.to_owned(), time.as_millis().to_string()])
+                tx.push_str(RTT_WRITE);
+                tx.push_u128(time.as_millis());
             }
             Self::NetworkType(network_type) => {
-                Tag::new(vec![NETWORK_TYPE.to_owned(), network_type.to_string()])
+                tx.push_str(NETWORK_TYPE);
+                tx.push_str(network_type.as_str());
             }
             Self::RelayType(relay_type) => {
-                Tag::new(vec![RELAY_TYPE.to_owned(), relay_type.to_string()])
+                tx.push_str(RELAY_TYPE);
+                tx.push_str(relay_type.as_str());
             }
-            Self::Nip(nip) => Tag::new(vec![String::from(NIP), nip.to_owned()]),
+            Self::Nip(nip) => {
+                tx.push_str(NIP);
+                tx.push_str(&nip);
+            }
             Self::Requirement {
                 requirement,
                 is_required,
-            } => Tag::new(vec![
-                REQUIREMENT.to_owned(),
-                BoolTag::to_string(requirement.as_str(), *is_required),
-            ]),
-            Self::Topic(topic) => Tag::new(vec![TOPIC.to_owned(), topic.to_owned()]),
-            Self::Kind { kind, is_accepted } => Tag::new(vec![
-                KIND.to_owned(),
-                BoolTag::to_string(kind.as_u16(), *is_accepted),
-            ]),
-            Self::Geohash(geohash) => Tag::new(vec![GEOHASH.to_owned(), geohash.to_owned()]),
+            } => {
+                tx.push_str(REQUIREMENT);
+                tx.push_str(&BoolTag::to_string(requirement, is_required));
+            }
+            Self::Topic(topic) => {
+                tx.push_str(TOPIC);
+                tx.push_str(&topic);
+            }
+            Self::Kind { kind, is_accepted } => {
+                tx.push_str(KIND);
+                tx.push_str(&BoolTag::to_string(kind.as_u16(), is_accepted));
+            }
+            Self::Geohash(geohash) => {
+                tx.push_str(GEOHASH);
+                tx.push_str(&geohash);
+            }
         }
     }
 }
@@ -165,7 +178,7 @@ impl FromStr for NetworkType {
             "tor" => Self::Tor,
             "i2p" => Self::I2p,
             "loki" => Self::Loki,
-            _ => Self::Other(value.to_owned()),
+            _ => Self::Other(value.to_string()),
         })
     }
 }
@@ -251,7 +264,7 @@ impl FromStr for RelayType {
             "Proxy" => Self::Proxy,
             "Trusted" => Self::Trusted,
             "Push" => Self::Push,
-            _ => Self::Other(value.to_owned()),
+            _ => Self::Other(value.to_string()),
         })
     }
 }
@@ -310,7 +323,7 @@ impl FromStr for Requirement {
             "writes" => Self::Writes,
             "pow" => Self::Pow,
             "payment" => Self::Payment,
-            _ => Self::Other(value.to_owned()),
+            _ => Self::Other(value.to_string()),
         })
     }
 }
@@ -364,7 +377,10 @@ impl<'a> BoolTag<'a> {
         Self { value, yes }
     }
 
-    fn to_string<T: fmt::Display>(value: T, yes: bool) -> String {
+    fn to_string<T>(value: T, yes: bool) -> String
+    where
+        T: fmt::Display,
+    {
         format!("{}{value}", if yes { "" } else { Self::NEGATION })
     }
 }
@@ -373,6 +389,7 @@ impl<'a> BoolTag<'a> {
 mod tests {
     use super::*;
     use crate::error::ErrorKind;
+    use crate::event::Tags;
 
     #[test]
     fn test_standardized_rtt_open_tag() {
@@ -380,7 +397,7 @@ mod tests {
         let parsed = Nip66Tag::parse(tag).unwrap();
 
         assert_eq!(parsed, Nip66Tag::RttOpen(Duration::from_millis(234)));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         let err = Nip66Tag::parse(["rtt-open"]).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Missing);
@@ -392,7 +409,7 @@ mod tests {
         let parsed = Nip66Tag::parse(tag).unwrap();
 
         assert_eq!(parsed, Nip66Tag::RttRead(Duration::from_millis(234)));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         let err = Nip66Tag::parse(["rtt-read"]).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Missing);
@@ -404,7 +421,7 @@ mod tests {
         let parsed = Nip66Tag::parse(tag).unwrap();
 
         assert_eq!(parsed, Nip66Tag::RttWrite(Duration::from_millis(234)));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         let err = Nip66Tag::parse(["rtt-write"]).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Missing);
@@ -415,15 +432,15 @@ mod tests {
         let tag = ["n", "clearnet"];
         let parsed = Nip66Tag::parse(tag).unwrap();
         assert_eq!(parsed, Nip66Tag::NetworkType(NetworkType::Clearnet));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         let tag = ["n", "fips"];
         let parsed = Nip66Tag::parse(tag).unwrap();
         assert_eq!(
             parsed,
-            Nip66Tag::NetworkType(NetworkType::Other("fips".to_owned()))
+            Nip66Tag::NetworkType(NetworkType::Other("fips".to_string()))
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         let err = Nip66Tag::parse(["n"]).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Missing);
@@ -438,7 +455,7 @@ mod tests {
             parsed,
             Nip66Tag::RelayType("PrivateInbox".parse::<RelayType>().unwrap())
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         let err = Nip66Tag::parse(["T"]).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Missing);
@@ -449,8 +466,8 @@ mod tests {
         let tag = ["N", "66"];
         let parsed = Nip66Tag::parse(tag).unwrap();
 
-        assert_eq!(parsed, Nip66Tag::Nip("66".to_owned()));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(parsed, Nip66Tag::Nip("66".to_string()));
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         let err = Nip66Tag::parse(["N"]).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Missing);
@@ -467,7 +484,7 @@ mod tests {
                 is_required: false
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         let tag = ["R", "auth"];
         let parsed = Nip66Tag::parse(tag).unwrap();
@@ -478,18 +495,18 @@ mod tests {
                 is_required: true
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         let tag = ["R", "!unknown"];
         let parsed = Nip66Tag::parse(tag).unwrap();
         assert_eq!(
             parsed,
             Nip66Tag::Requirement {
-                requirement: Requirement::Other("unknown".to_owned()),
+                requirement: Requirement::Other("unknown".to_string()),
                 is_required: false
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         let err = Nip66Tag::parse(["R"]).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Missing);
@@ -500,8 +517,8 @@ mod tests {
         let tag = ["t", "nsfw"];
         let parsed = Nip66Tag::parse(tag).unwrap();
 
-        assert_eq!(parsed, Nip66Tag::Topic("nsfw".to_owned()));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(parsed, Nip66Tag::Topic("nsfw".to_string()));
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         let err = Nip66Tag::parse(["t"]).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Missing);
@@ -518,7 +535,7 @@ mod tests {
                 is_accepted: false
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         let tag = ["k", "1"];
         let parsed = Nip66Tag::parse(tag).unwrap();
@@ -529,7 +546,7 @@ mod tests {
                 is_accepted: true
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         let err = Nip66Tag::parse(["k"]).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Missing);
@@ -540,8 +557,8 @@ mod tests {
         let tag = ["g", "ww8p1r4t8"];
         let parsed = Nip66Tag::parse(tag).unwrap();
 
-        assert_eq!(parsed, Nip66Tag::Geohash("ww8p1r4t8".to_owned()));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(parsed, Nip66Tag::Geohash("ww8p1r4t8".to_string()));
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
 
         let err = Nip66Tag::parse(["g"]).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Missing);

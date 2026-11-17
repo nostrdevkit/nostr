@@ -9,7 +9,6 @@
 #[cfg(all(feature = "std", feature = "os-rng"))]
 use alloc::boxed::Box;
 use alloc::string::String;
-use alloc::vec::Vec;
 #[cfg(all(feature = "std", feature = "os-rng"))]
 use core::future::Future;
 #[cfg(all(feature = "std", feature = "os-rng"))]
@@ -29,10 +28,14 @@ use secp256k1::{Secp256k1, Verification};
 use crate::error::{Error, ErrorKind};
 #[cfg(all(feature = "std", feature = "os-rng"))]
 use crate::event::{AsyncSignEvent, EventBuilder, FinalizeEvent, FinalizeEventAsync, SignEvent};
-use crate::event::{Event, Kind, Tag, UnsignedEvent};
+use crate::event::{Event, Kind, TagsMut, UnsignedEvent, WriteTag};
 use crate::key::PublicKey;
 #[cfg(all(feature = "std", feature = "os-rng"))]
 use crate::key::{AsyncGetPublicKey, GetPublicKey, Keys};
+#[cfg(all(feature = "std", feature = "os-rng"))]
+use crate::nips::nip01::Nip01Tag;
+#[cfg(all(feature = "std", feature = "os-rng"))]
+use crate::nips::nip40::Nip40Tag;
 #[cfg(all(feature = "std", feature = "os-rng"))]
 use crate::nips::nip44;
 use crate::nips::nip44::{AsyncNip44, Nip44};
@@ -276,7 +279,7 @@ pub struct GiftWrapBuilder {
     /// The rumor
     pub rumor: UnsignedEvent,
     /// Extra tags to add to the event
-    pub extra_tags: Vec<Tag>,
+    pub extra_tags: TagsMut,
     /// NIP-40 expiration, relative to the gift wrap's `created_at`
     pub expiration: Option<Duration>,
 }
@@ -288,7 +291,7 @@ impl GiftWrapBuilder {
         Self {
             receiver,
             rumor,
-            extra_tags: Vec::new(),
+            extra_tags: TagsMut::new(),
             expiration: None,
         }
     }
@@ -298,9 +301,9 @@ impl GiftWrapBuilder {
     pub fn extra_tags<I, T>(mut self, tags: I) -> Self
     where
         I: IntoIterator<Item = T>,
-        T: Into<Tag>,
+        T: WriteTag,
     {
-        self.extra_tags.extend(tags.into_iter().map(Into::into));
+        self.extra_tags.extend(tags);
         self
     }
 
@@ -358,7 +361,7 @@ where
 fn make_gift_wrap(
     seal: Event,
     receiver: PublicKey,
-    extra_tags: Vec<Tag>,
+    mut extra_tags: TagsMut,
     expiration: Option<Duration>,
 ) -> Result<Event, Error> {
     // Generate the random keys
@@ -373,11 +376,8 @@ fn make_gift_wrap(
     )
     .map_err(Error::crypto)?;
 
-    // Collect extra tags
-    let mut tags: Vec<Tag> = extra_tags;
-
     // Push received public key
-    tags.push(Tag::public_key(receiver));
+    extra_tags.push(Nip01Tag::public_key(receiver));
 
     // Use a tweaked timestamp to thwart time-analysis attacks
     let created_at: Timestamp = tweaked_timestamp();
@@ -386,14 +386,14 @@ fn make_gift_wrap(
     // leak the real creation time.
     // `expiration - created_at` stays constant.
     if let Some(duration) = expiration {
-        tags.push(Tag::expiration(created_at + duration));
+        extra_tags.push(Nip40Tag::Expiration(created_at + duration));
     }
 
-    EventBuilder::new(Kind::GiftWrap)
+    let mut builder: EventBuilder = EventBuilder::new(Kind::GiftWrap)
         .content(content)
-        .tags(tags)
-        .custom_created_at(created_at)
-        .finalize(&keys)
+        .custom_created_at(created_at);
+    builder.tags = extra_tags;
+    builder.finalize(&keys)
 }
 
 fn parse_and_verify_seal<C>(secp: &Secp256k1<C>, seal: String) -> Result<Event, Error>

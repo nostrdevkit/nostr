@@ -8,14 +8,15 @@
 
 use alloc::borrow::Cow;
 use alloc::string::{String, ToString};
-use alloc::vec::Vec;
 use core::str::FromStr;
 
 use url::Url;
 
 use crate::error::Error;
+#[cfg(all(test, feature = "std", feature = "os-rng"))]
+use crate::event::Tags;
 use crate::event::{
-    Event, EventBuilder, EventId, IntoEventBuilder, Kind, Tag, impl_tag_codec_conversions,
+    Event, EventBuilder, EventId, IntoEventBuilder, Kind, TagsMut, impl_tag_codec_conversions,
 };
 use crate::key::PublicKey;
 use crate::nips::nip01::{self, Coordinate};
@@ -103,49 +104,34 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
+    fn write(self, tx) {
         match self {
             Self::Coordinate {
                 coordinate,
                 relay_hint,
                 uppercase,
-            } => maybe_uppercase(
-                nip01::serialize_a_tag(coordinate, relay_hint.as_ref()),
-                *uppercase,
-            ),
+            } => nip01::serialize_a_tag(tx, uppercase, &coordinate, relay_hint.as_ref()),
             Self::Event {
                 id,
                 relay_hint,
                 public_key,
                 uppercase,
-            } => maybe_uppercase(
-                nip01::serialize_e_tag(id, relay_hint.as_ref(), public_key.as_ref()),
-                *uppercase,
-            ),
+            } => nip01::serialize_e_tag(tx, uppercase, &id, relay_hint.as_ref(), public_key.as_ref()),
             Self::ExternalContent {
                 content,
                 hint,
                 uppercase,
-            } => maybe_uppercase(nip73::serialize_i_tag(content, hint.as_ref()), *uppercase),
-            Self::Kind { kind, uppercase } => Tag::new(vec![
-                if *uppercase {
-                    String::from("K")
-                } else {
-                    String::from("k")
-                },
-                kind.to_string(),
-            ]),
-            Self::Nip73Kind { kind, uppercase } => {
-                maybe_uppercase(nip73::serialize_k_tag(kind), *uppercase)
+            } => nip73::serialize_i_tag(tx, uppercase, &content, hint.as_ref()),
+            Self::Kind { kind, uppercase } => {
+                tx.push_str(if uppercase { "K" } else { "k" });
+                tx.push_str(&kind.to_string());
             }
+            Self::Nip73Kind { kind, uppercase } => nip73::serialize_k_tag(tx, uppercase, &kind),
             Self::PublicKey {
                 public_key,
                 relay_hint,
                 uppercase,
-            } => maybe_uppercase(
-                nip01::serialize_p_tag(public_key, relay_hint.as_ref()),
-                *uppercase,
-            ),
+            } => nip01::serialize_p_tag(tx, uppercase, &public_key, relay_hint.as_ref()),
         }
     }
 }
@@ -214,14 +200,15 @@ impl<'a> CommentBuilder<'a> {
 
 impl IntoEventBuilder for CommentBuilder<'_> {
     fn into_event_builder(self) -> EventBuilder {
-        EventBuilder::new(Kind::Comment)
-            .content(self.content)
-            .tags(
-                self.root
-                    .map(|target| target.as_vec(true))
-                    .unwrap_or_default(),
-            )
-            .tags(self.comment_to.as_vec(false))
+        let mut builder: EventBuilder = EventBuilder::new(Kind::Comment).content(self.content);
+
+        if let Some(root) = self.root {
+            root.extend_tags(&mut builder.tags, true);
+        }
+
+        self.comment_to.extend_tags(&mut builder.tags, false);
+
+        builder
     }
 }
 
@@ -284,22 +271,7 @@ impl<'a> CommentTarget<'a> {
         }
     }
 
-    /// Converts the comment target into a vector of tags
-    ///
-    /// ## Example
-    ///
-    /// If the target is `event` and `is_root` is true will return
-    ///
-    /// ```json
-    /// [
-    ///   ["E", "<event-id>", "<relay-hint>", "<public-key>"],
-    ///   ["P", "<public-key>"],
-    ///   ["K", "<event-kind>"]
-    /// ]
-    /// ```
-    pub fn as_vec(&self, is_root: bool) -> Vec<Tag> {
-        let mut tags = Vec::new();
-
+    pub(crate) fn extend_tags(&self, tags: &mut TagsMut, is_root: bool) {
         match self {
             Self::Event {
                 id,
@@ -307,38 +279,26 @@ impl<'a> CommentTarget<'a> {
                 pubkey_hint,
                 kind,
             } => {
-                tags.reserve_exact(
-                    1 + usize::from(pubkey_hint.is_some()) + usize::from(kind.is_some()),
-                );
-                tags.push(
-                    Nip22Tag::Event {
-                        id: *id,
-                        relay_hint: relay_hint.clone().map(|r| r.into_owned()),
-                        public_key: pubkey_hint.as_ref().copied(),
-                        uppercase: is_root,
-                    }
-                    .to_tag(),
-                );
+                tags.push(Nip22Tag::Event {
+                    id: *id,
+                    relay_hint: relay_hint.clone().map(|r| r.into_owned()),
+                    public_key: pubkey_hint.as_ref().copied(),
+                    uppercase: is_root,
+                });
 
                 if let Some(pubkey) = pubkey_hint {
-                    tags.push(
-                        Nip22Tag::PublicKey {
-                            public_key: *pubkey,
-                            relay_hint: relay_hint.clone().map(|r| r.into_owned()),
-                            uppercase: is_root,
-                        }
-                        .to_tag(),
-                    );
+                    tags.push(Nip22Tag::PublicKey {
+                        public_key: *pubkey,
+                        relay_hint: relay_hint.clone().map(|r| r.into_owned()),
+                        uppercase: is_root,
+                    });
                 }
 
                 if let Some(kind) = kind {
-                    tags.push(
-                        Nip22Tag::Kind {
-                            kind: *kind,
-                            uppercase: is_root,
-                        }
-                        .to_tag(),
-                    );
+                    tags.push(Nip22Tag::Kind {
+                        kind: *kind,
+                        uppercase: is_root,
+                    });
                 }
             }
             Self::Coordinate {
@@ -346,55 +306,40 @@ impl<'a> CommentTarget<'a> {
                 relay_hint,
                 ..
             } => {
-                let public_key: PublicKey = address.public_key;
-                let kind: Kind = address.kind;
-
-                tags.reserve_exact(3);
-                tags.push(
-                    Nip22Tag::Coordinate {
-                        coordinate: address.clone().into_owned(),
-                        relay_hint: relay_hint.clone().map(|r| r.into_owned()),
-                        uppercase: is_root,
-                    }
-                    .to_tag(),
-                );
-                tags.push(
-                    Nip22Tag::PublicKey {
-                        public_key,
-                        relay_hint: relay_hint.clone().map(|r| r.into_owned()),
-                        uppercase: is_root,
-                    }
-                    .to_tag(),
-                );
-                tags.push(
-                    Nip22Tag::Kind {
-                        kind,
-                        uppercase: is_root,
-                    }
-                    .to_tag(),
-                );
+                tags.push(Nip22Tag::Coordinate {
+                    coordinate: address.clone().into_owned(),
+                    relay_hint: relay_hint.clone().map(|r| r.into_owned()),
+                    uppercase: is_root,
+                });
+                tags.push(Nip22Tag::PublicKey {
+                    public_key: address.public_key,
+                    relay_hint: relay_hint.clone().map(|r| r.into_owned()),
+                    uppercase: is_root,
+                });
+                tags.push(Nip22Tag::Kind {
+                    kind: address.kind,
+                    uppercase: is_root,
+                });
             }
             Self::External { content, hint } => {
-                tags.reserve_exact(2);
-                tags.push(
-                    Nip22Tag::ExternalContent {
-                        content: ExternalContentId::clone(content),
-                        hint: hint.clone().map(|r| r.into_owned()),
-                        uppercase: is_root,
-                    }
-                    .to_tag(),
-                );
-                tags.push(
-                    Nip22Tag::Nip73Kind {
-                        kind: content.kind(),
-                        uppercase: is_root,
-                    }
-                    .to_tag(),
-                )
+                tags.push(Nip22Tag::ExternalContent {
+                    content: ExternalContentId::clone(content),
+                    hint: hint.clone().map(|r| r.into_owned()),
+                    uppercase: is_root,
+                });
+                tags.push(Nip22Tag::Nip73Kind {
+                    kind: content.kind(),
+                    uppercase: is_root,
+                });
             }
         }
+    }
 
-        tags
+    #[cfg(all(test, feature = "std", feature = "os-rng"))]
+    fn to_tags(&self, is_root: bool) -> Tags {
+        let mut tags: TagsMut = TagsMut::new();
+        self.extend_tags(&mut tags, is_root);
+        tags.freeze()
     }
 }
 
@@ -635,35 +580,10 @@ where
     })
 }
 
-#[inline]
-fn maybe_uppercase(mut tag: Tag, uppercase: bool) -> Tag {
-    if uppercase {
-        tag[0] = tag[0].to_ascii_uppercase();
-    }
-    tag
-}
-
 #[cfg(all(test, feature = "std", feature = "os-rng"))]
 mod tests {
     use super::*;
-    use crate::event::Tags;
     use crate::prelude::*;
-
-    fn check_kind(tags: &[Tag], kind: Kind, uppercase: bool) {
-        assert!(tags.contains(&Tag::from(Nip22Tag::Kind { kind, uppercase })));
-    }
-
-    fn check_nip73_kind(tags: &[Tag], kind: Nip73Kind, uppercase: bool) {
-        assert!(tags.contains(&Tag::from(Nip22Tag::Nip73Kind { kind, uppercase })));
-    }
-
-    fn check_pubkey(tags: &[Tag], public_key: PublicKey, uppercase: bool) {
-        assert!(tags.contains(&Tag::from(Nip22Tag::PublicKey {
-            public_key,
-            relay_hint: None,
-            uppercase,
-        })));
-    }
 
     #[test]
     fn test_standardized_event_tag() {
@@ -694,7 +614,7 @@ mod tests {
                 uppercase: true,
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -718,12 +638,12 @@ mod tests {
                 uppercase: true,
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
     fn test_standardized_external_content_tag() {
-        let content = ExternalContentId::Url(Url::parse("https://rust-nostr.org").unwrap());
+        let content = ExternalContentId::Url(Url::parse("https://nostrdevkit.org").unwrap());
         let hint = Url::parse("https://example.com").unwrap();
         let tag = vec![String::from("I"), content.to_string(), hint.to_string()];
         let parsed = Nip22Tag::parse(&tag).unwrap();
@@ -736,7 +656,7 @@ mod tests {
                 uppercase: true,
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -750,30 +670,37 @@ mod tests {
             &Tags::new(),
             "",
         );
+        let pubkey = keys.public_key();
 
-        let comment_target = CommentTarget::event(event_id, kind, Some(keys.public_key()), None);
+        let comment_target = CommentTarget::event(event_id, kind, Some(pubkey), None);
 
         // Root
-        let root_vec = comment_target.as_vec(true);
-        assert!(root_vec.contains(&Tag::from(Nip22Tag::Event {
-            id: event_id,
-            relay_hint: None,
-            public_key: Some(keys.public_key()),
-            uppercase: true,
-        })));
-        check_pubkey(&root_vec, keys.public_key(), true);
-        check_kind(&root_vec, kind, true);
+        let expected: Tags = Tags::parse([
+            vec![
+                "E".to_string(),
+                event_id.to_hex(),
+                String::new(),
+                pubkey.to_string(),
+            ],
+            vec!["P".to_string(), pubkey.to_string()],
+            vec!["K".to_string(), kind.to_string()],
+        ])
+        .unwrap();
+        assert_eq!(comment_target.to_tags(true), expected);
 
         // Parent
-        let parent_vec = comment_target.as_vec(false);
-        assert!(parent_vec.contains(&Tag::from(Nip22Tag::Event {
-            id: event_id,
-            relay_hint: None,
-            public_key: Some(keys.public_key()),
-            uppercase: false,
-        })));
-        check_pubkey(&parent_vec, keys.public_key(), false);
-        check_kind(&parent_vec, kind, false);
+        let expected: Tags = Tags::parse([
+            vec![
+                "e".to_string(),
+                event_id.to_hex(),
+                String::new(),
+                pubkey.to_string(),
+            ],
+            vec!["p".to_string(), pubkey.to_string()],
+            vec!["k".to_string(), kind.to_string()],
+        ])
+        .unwrap();
+        assert_eq!(comment_target.to_tags(false), expected);
     }
 
     #[test]
@@ -796,53 +723,50 @@ mod tests {
         let keys = Keys::generate();
         let kind = Kind::ContactList;
         let coordinate = Coordinate::new(kind, keys.public_key());
+        let pubkey = keys.public_key();
 
         let comment_target = CommentTarget::coordinate(Cow::Borrowed(&coordinate), None);
 
         // Root
-        let root_vec = comment_target.as_vec(true);
-        assert!(root_vec.contains(&Tag::from(Nip22Tag::Coordinate {
-            coordinate: coordinate.clone(),
-            relay_hint: None,
-            uppercase: true,
-        })));
-        check_pubkey(&root_vec, keys.public_key(), true);
-        check_kind(&root_vec, kind, true);
+        let expected: Tags = Tags::parse([
+            vec!["A".to_string(), coordinate.to_string()],
+            vec!["P".to_string(), pubkey.to_string()],
+            vec!["K".to_string(), kind.to_string()],
+        ])
+        .unwrap();
+        assert_eq!(comment_target.to_tags(true), expected);
 
         // Parent
-        let parent_vec = comment_target.as_vec(false);
-        assert!(parent_vec.contains(&Tag::from(Nip22Tag::Coordinate {
-            coordinate,
-            relay_hint: None,
-            uppercase: false,
-        })));
-        check_pubkey(&parent_vec, keys.public_key(), false);
-        check_kind(&parent_vec, kind, false);
+        let expected: Tags = Tags::parse([
+            vec!["a".to_string(), coordinate.to_string()],
+            vec!["p".to_string(), pubkey.to_string()],
+            vec!["k".to_string(), kind.to_string()],
+        ])
+        .unwrap();
+        assert_eq!(comment_target.to_tags(false), expected);
     }
 
     #[test]
     fn test_external_content() {
-        let external_content = ExternalContentId::Url("https://rust-nostr.org".parse().unwrap());
-        let kind = external_content.kind();
+        let external_content = ExternalContentId::Url("https://nostrdevkit.org".parse().unwrap());
+        let nip73_kind = external_content.kind();
 
         let comment_target = CommentTarget::external(Cow::Borrowed(&external_content), None);
 
         // Root
-        let root_vec = comment_target.as_vec(true);
-        assert!(root_vec.contains(&Tag::from(Nip22Tag::ExternalContent {
-            content: external_content.clone(),
-            hint: None,
-            uppercase: true,
-        })));
-        check_nip73_kind(&root_vec, kind.clone(), true);
+        let expected: Tags = Tags::parse([
+            vec!["I".to_string(), external_content.to_string()],
+            vec!["K".to_string(), nip73_kind.to_string()],
+        ])
+        .unwrap();
+        assert_eq!(comment_target.to_tags(true), expected);
 
         // Parent
-        let parent_vec = comment_target.as_vec(false);
-        assert!(parent_vec.contains(&Tag::from(Nip22Tag::ExternalContent {
-            content: external_content.clone(),
-            hint: None,
-            uppercase: false,
-        })));
-        check_nip73_kind(&parent_vec, kind, false);
+        let expected: Tags = Tags::parse([
+            vec!["i".to_string(), external_content.to_string()],
+            vec!["k".to_string(), nip73_kind.to_string()],
+        ])
+        .unwrap();
+        assert_eq!(comment_target.to_tags(false), expected);
     }
 }

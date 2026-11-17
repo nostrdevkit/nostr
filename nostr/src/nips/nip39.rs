@@ -7,13 +7,12 @@
 //! <https://github.com/nostr-protocol/nips/blob/master/39.md>
 
 use alloc::string::{String, ToString};
-use alloc::vec;
 use core::fmt;
 use core::str::FromStr;
 
 use super::util::{missing_tag_kind, take_string, unknown_tag};
 use crate::error::{Error, ErrorKind};
-use crate::event::{Tag, impl_tag_codec_conversions};
+use crate::event::impl_tag_codec_conversions;
 
 const IDENTITY: &str = "i";
 
@@ -130,20 +129,19 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
-        match self {
-            Self::Identity(identity) => Tag::new(vec![
-                String::from(IDENTITY),
-                identity.tag_platform_identity(),
-                identity.proof.clone(),
-            ]),
-        }
+    fn write(self, tx) {
+        let Self::Identity(identity) = self;
+
+        tx.push_str(IDENTITY);
+        tx.push_str(&identity.tag_platform_identity());
+        tx.push_str(&identity.proof);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::Tags;
 
     #[test]
     fn test_identity_tag() {
@@ -159,8 +157,8 @@ mod tests {
             })
         );
         assert_eq!(
-            parsed.to_tag(),
-            Tag::parse(["i", "github:semisol", "9721ce4ee4fceb91c9711ca2a6c9a5ab",]).unwrap()
+            Tags::from_iter([parsed]),
+            Tags::parse([["i", "github:semisol", "9721ce4ee4fceb91c9711ca2a6c9a5ab"]]).unwrap()
         );
     }
 

@@ -15,15 +15,14 @@ use core::str::FromStr;
 
 use bitcoin_hashes::sha1::Hash as Sha1Hash;
 
-use super::nip01::Coordinate;
+use super::nip01::{Coordinate, Nip01Tag};
 use super::nip22::Nip22Tag;
+use super::nip51::Nip51Tag;
 use super::util::{
     missing_tag_kind, missing_value, take_and_parse_from_str, take_string, unknown_tag,
 };
 use crate::error::{Error, ErrorKind};
-use crate::event::{
-    EventBuilder, EventId, IntoEventBuilder, Kind, Tag, impl_tag_codec_conversions,
-};
+use crate::event::{EventBuilder, EventId, IntoEventBuilder, Kind, impl_tag_codec_conversions};
 use crate::key::PublicKey;
 use crate::types::url::Url;
 use crate::types::{RelayUrl, Timestamp};
@@ -226,86 +225,119 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
+    fn write(self, tx) {
         match self {
             Self::AppliedAsCommits(commits) => {
-                let mut tag: Vec<String> = Vec::with_capacity(1 + commits.len());
-                tag.push(String::from(APPLIED_AS_COMMITS));
-                tag.extend(commits.iter().map(ToString::to_string));
-                Tag::new(tag)
+                tx.push_str(APPLIED_AS_COMMITS);
+
+                for commit in &commits {
+                    tx.push_hex(commit.as_byte_array());
+                }
             }
-            Self::BranchName(name) => Tag::new(vec![String::from(BRANCH_NAME), name.clone()]),
+            Self::BranchName(name) => {
+                tx.push_str(BRANCH_NAME);
+                tx.push_str(&name);
+            }
             Self::Clone(urls) => {
-                let mut tag: Vec<String> = Vec::with_capacity(1 + urls.len());
-                tag.push(String::from(CLONE));
-                tag.extend(urls.iter().map(ToString::to_string));
-                Tag::new(tag)
+                tx.push_str(CLONE);
+
+                for url in &urls {
+                    tx.push_str(url.as_str());
+                }
             }
-            Self::Commit(commit) => Tag::new(vec![String::from(COMMIT), commit.to_string()]),
+            Self::Commit(commit) => {
+                tx.push_str(COMMIT);
+                tx.push_hex(commit.as_byte_array());
+            }
             Self::CommitPgpSig(signature) => {
-                Tag::new(vec![String::from(COMMIT_PGP_SIG), signature.clone()])
+                tx.push_str(COMMIT_PGP_SIG);
+                tx.push_str(&signature);
             }
             Self::Committer {
                 name,
                 email,
                 timestamp,
                 offset_minutes,
-            } => Tag::new(vec![
-                String::from(COMMITTER),
-                name.clone(),
-                email.clone(),
-                timestamp.to_string(),
-                offset_minutes.to_string(),
-            ]),
+            } => {
+                tx.push_str(COMMITTER);
+                tx.push_str(&name);
+                tx.push_str(&email);
+                tx.push_u64(timestamp.as_secs());
+                tx.push_str(&offset_minutes.to_string());
+            }
             Self::CurrentCommit(commit) => {
-                Tag::new(vec![String::from(CURRENT_COMMIT), commit.to_string()])
+                tx.push_str(CURRENT_COMMIT);
+                tx.push_hex(commit.as_byte_array());
             }
             Self::Description(description) => {
-                Tag::new(vec![String::from(DESCRIPTION), description.clone()])
+                tx.push_str(DESCRIPTION);
+                tx.push_str(&description);
             }
-            Self::EarliestUniqueCommitId(commit) => Tag::new(vec![
-                String::from(REFERENCE),
-                commit.to_string(),
-                String::from(EUC),
-            ]),
-            Self::Grasp(relay) => Tag::new(vec![String::from(GRASP), relay.to_string()]),
-            Self::Head(branch) => Tag::new(vec![
-                String::from(HEAD),
-                format!("ref: refs/heads/{branch}"),
-            ]),
+            Self::EarliestUniqueCommitId(commit) => {
+                tx.push_str(REFERENCE);
+                tx.push_hex(commit.as_byte_array());
+                tx.push_str(EUC);
+            }
+            Self::Grasp(relay) => {
+                tx.push_str(GRASP);
+                tx.push_str(relay.as_str());
+            }
+            Self::Head(branch) => {
+                tx.push_str(HEAD);
+                tx.push_str(&format!("ref: refs/heads/{branch}"));
+            }
             Self::Maintainers(public_keys) => {
-                let mut tag: Vec<String> = Vec::with_capacity(1 + public_keys.len());
-                tag.push(String::from(MAINTAINERS));
-                tag.extend(public_keys.iter().map(ToString::to_string));
-                Tag::new(tag)
+                tx.push_str(MAINTAINERS);
+
+                for public_key in &public_keys {
+                    tx.push_hex(public_key.as_bytes());
+                }
             }
-            Self::MergeBase(commit) => Tag::new(vec![String::from(MERGE_BASE), commit.to_string()]),
+            Self::MergeBase(commit) => {
+                tx.push_str(MERGE_BASE);
+                tx.push_hex(commit.as_byte_array());
+            }
             Self::MergeCommit(commit) => {
-                Tag::new(vec![String::from(MERGE_COMMIT), commit.to_string()])
+                tx.push_str(MERGE_COMMIT);
+                tx.push_hex(commit.as_byte_array());
             }
-            Self::Name(name) => Tag::new(vec![String::from(NAME), name.clone()]),
+            Self::Name(name) => {
+                tx.push_str(NAME);
+                tx.push_str(&name);
+            }
             Self::ParentCommit(commit) => {
-                Tag::new(vec![String::from(PARENT_COMMIT), commit.to_string()])
+                tx.push_str(PARENT_COMMIT);
+                tx.push_hex(commit.as_byte_array());
             }
-            Self::Reference(commit) => Tag::new(vec![String::from(REFERENCE), commit.to_string()]),
+            Self::Reference(commit) => {
+                tx.push_str(REFERENCE);
+                tx.push_hex(commit.as_byte_array());
+            }
             Self::RefHead { branch, commit } => {
-                Tag::new(vec![format!("{REFS_HEADS}{branch}"), commit.to_string()])
+                tx.push_str(&format!("{REFS_HEADS}{branch}"));
+                tx.push_hex(commit.as_byte_array());
             }
             Self::RefTag { name, commit } => {
-                Tag::new(vec![format!("{REFS_TAGS}{name}"), commit.to_string()])
+                tx.push_str(&format!("{REFS_TAGS}{name}"));
+                tx.push_hex(commit.as_byte_array());
             }
             Self::Relays(relays) => {
-                let mut tag: Vec<String> = Vec::with_capacity(1 + relays.len());
-                tag.push(String::from(RELAYS));
-                tag.extend(relays.iter().map(ToString::to_string));
-                Tag::new(tag)
+                tx.push_str(RELAYS);
+
+                for relay in &relays {
+                    tx.push_str(relay.as_str());
+                }
             }
-            Self::Subject(subject) => Tag::new(vec![String::from(SUBJECT), subject.clone()]),
+            Self::Subject(subject) => {
+                tx.push_str(SUBJECT);
+                tx.push_str(&subject);
+            }
             Self::Web(urls) => {
-                let mut tag: Vec<String> = Vec::with_capacity(1 + urls.len());
-                tag.push(String::from(WEB));
-                tag.extend(urls.iter().map(ToString::to_string));
-                Tag::new(tag)
+                tx.push_str(WEB);
+
+                for url in &urls {
+                    tx.push_str(url.as_str());
+                }
             }
         }
     }
@@ -412,48 +444,48 @@ pub struct GitRepositoryAnnouncement {
 
 impl IntoEventBuilder for GitRepositoryAnnouncement {
     fn into_event_builder(self) -> EventBuilder {
-        let mut tags: Vec<Tag> = Vec::with_capacity(1);
+        let mut builder = EventBuilder::new(Kind::GitRepoAnnouncement);
 
         // Add repo ID
-        tags.push(Tag::identifier(self.id));
+        builder.tags.push(Nip01Tag::identifier(self.id));
 
         // Add name
         if let Some(name) = self.name {
-            tags.push(Nip34Tag::Name(name).to_tag());
+            builder.tags.push(Nip34Tag::Name(name));
         }
 
         // Add description
         if let Some(description) = self.description {
-            tags.push(Nip34Tag::Description(description).to_tag());
+            builder.tags.push(Nip34Tag::Description(description));
         }
 
         // Add web
         if !self.web.is_empty() {
-            tags.push(Nip34Tag::Web(self.web).to_tag());
+            builder.tags.push(Nip34Tag::Web(self.web));
         }
 
         // Add clone
         if !self.clone.is_empty() {
-            tags.push(Nip34Tag::Clone(self.clone).to_tag());
+            builder.tags.push(Nip34Tag::Clone(self.clone));
         }
 
         // Add relays
         if !self.relays.is_empty() {
-            tags.push(Nip34Tag::Relays(self.relays).to_tag());
+            builder.tags.push(Nip34Tag::Relays(self.relays));
         }
 
         // Add EUC
         if let Some(commit) = self.euc {
-            tags.push(Nip34Tag::EarliestUniqueCommitId(commit).to_tag());
+            builder.tags.push(Nip34Tag::EarliestUniqueCommitId(commit));
         }
 
         // Add maintainers
         if !self.maintainers.is_empty() {
-            tags.push(Nip34Tag::Maintainers(self.maintainers).to_tag());
+            builder.tags.push(Nip34Tag::Maintainers(self.maintainers));
         }
 
         // Build
-        EventBuilder::new(Kind::GitRepoAnnouncement).tags(tags)
+        builder
     }
 }
 
@@ -475,26 +507,27 @@ impl IntoEventBuilder for GitIssue {
     fn into_event_builder(self) -> EventBuilder {
         let owner_public_key: PublicKey = self.repository.public_key;
 
-        let mut tags: Vec<Tag> = Vec::with_capacity(2);
+        let mut builder: EventBuilder = EventBuilder::new(Kind::GitIssue).content(self.content);
+
+        builder.tags.reserve(2 + self.labels.len());
 
         // Add coordinate
-        tags.push(Tag::coordinate(self.repository, None));
+        builder.tags.push(Nip01Tag::coordinate(self.repository));
 
         // Add owner public key
-        tags.push(Tag::public_key(owner_public_key));
+        builder.tags.push(Nip01Tag::public_key(owner_public_key));
 
         // Add subject
         if let Some(subject) = self.subject {
-            tags.push(Nip34Tag::Subject(subject).to_tag());
+            builder.tags.push(Nip34Tag::Subject(subject));
         }
 
         // Add labels
-        tags.extend(self.labels.into_iter().map(Tag::hashtag));
+        builder
+            .tags
+            .extend(self.labels.into_iter().map(Nip51Tag::Hashtag));
 
-        // Build
-        EventBuilder::new(Kind::GitIssue)
-            .content(self.content)
-            .tags(tags)
+        builder
     }
 }
 
@@ -576,25 +609,27 @@ impl IntoEventBuilder for GitPatch {
     fn into_event_builder(self) -> EventBuilder {
         let owner_public_key: PublicKey = self.repository.public_key;
 
-        let mut tags: Vec<Tag> = Vec::with_capacity(3);
+        let content: String = self.content.to_string();
+        let mut builder: EventBuilder = EventBuilder::new(Kind::GitPatch).content(content);
+
+        builder.tags.reserve(3 + 5 + self.labels.len());
 
         // Push coordinate
-        tags.push(Tag::coordinate(self.repository, None));
+        builder.tags.push(Nip01Tag::coordinate(self.repository));
 
         // Tag repo owner
-        tags.push(Tag::public_key(owner_public_key));
+        builder.tags.push(Nip01Tag::public_key(owner_public_key));
 
         // Add EUC (without `euc` marker)
-        tags.push(Nip34Tag::Reference(self.euc).to_tag());
-
-        // Serialize content to string (used later)
-        let content: String = self.content.to_string();
+        builder.tags.push(Nip34Tag::Reference(self.euc));
 
         // Handle patch content
         match self.content {
             GitPatchContent::CoverLetter { .. } => {
                 // Add cover letter hashtag
-                tags.push(Tag::hashtag("cover-letter"));
+                builder
+                    .tags
+                    .push(Nip51Tag::Hashtag(String::from("cover-letter")));
             }
             GitPatchContent::Patch {
                 commit,
@@ -603,30 +638,27 @@ impl IntoEventBuilder for GitPatch {
                 committer,
                 ..
             } => {
-                tags.reserve_exact(5);
-                tags.push(Nip34Tag::Reference(commit).to_tag());
-                tags.push(Nip34Tag::Commit(commit).to_tag());
-                tags.push(Nip34Tag::ParentCommit(parent_commit).to_tag());
-                tags.push(Nip34Tag::CommitPgpSig(commit_pgp_sig.unwrap_or_default()).to_tag());
-                tags.push(
-                    Nip34Tag::Committer {
-                        name: committer.name.unwrap_or_default(),
-                        email: committer.email.unwrap_or_default(),
-                        timestamp: committer.timestamp,
-                        offset_minutes: committer.offset_minutes,
-                    }
-                    .to_tag(),
-                );
+                builder.tags.push(Nip34Tag::Reference(commit));
+                builder.tags.push(Nip34Tag::Commit(commit));
+                builder.tags.push(Nip34Tag::ParentCommit(parent_commit));
+                builder
+                    .tags
+                    .push(Nip34Tag::CommitPgpSig(commit_pgp_sig.unwrap_or_default()));
+                builder.tags.push(Nip34Tag::Committer {
+                    name: committer.name.unwrap_or_default(),
+                    email: committer.email.unwrap_or_default(),
+                    timestamp: committer.timestamp,
+                    offset_minutes: committer.offset_minutes,
+                });
             }
         }
 
         // Add labels
-        tags.extend(self.labels.into_iter().map(Tag::hashtag));
+        builder
+            .tags
+            .extend(self.labels.into_iter().map(Nip51Tag::Hashtag));
 
-        // Build
-        EventBuilder::new(Kind::GitPatch)
-            .content(content)
-            .tags(tags)
+        builder
     }
 }
 
@@ -657,51 +689,53 @@ impl IntoEventBuilder for GitPullRequest {
     fn into_event_builder(self) -> EventBuilder {
         let owner_public_key: PublicKey = self.repository.public_key;
 
-        // Calculate capacity: 2 required + up to 6 optional + labels
-        let capacity = 2 + 6 + self.labels.len();
-        let mut tags: Vec<Tag> = Vec::with_capacity(capacity);
+        let mut builder: EventBuilder =
+            EventBuilder::new(Kind::GitPullRequest).content(self.content);
+
+        builder.tags.reserve(2 + 6 + self.labels.len());
 
         // Add coordinate
-        tags.push(Tag::coordinate(self.repository, None));
+        builder.tags.push(Nip01Tag::coordinate(self.repository));
 
         // Add repository owner public key
-        tags.push(Tag::public_key(owner_public_key));
+        builder.tags.push(Nip01Tag::public_key(owner_public_key));
 
         // Add subject
         if let Some(subject) = self.subject {
-            tags.push(Nip34Tag::Subject(subject).to_tag());
+            builder.tags.push(Nip34Tag::Subject(subject));
         }
 
         // Add labels
-        tags.extend(self.labels.into_iter().map(Tag::hashtag));
+        builder
+            .tags
+            .extend(self.labels.into_iter().map(Nip51Tag::Hashtag));
 
         // Add current commit
-        tags.push(Nip34Tag::CurrentCommit(self.current_commit).to_tag());
+        builder
+            .tags
+            .push(Nip34Tag::CurrentCommit(self.current_commit));
 
         // Add clone URLs
         if !self.clone.is_empty() {
-            tags.push(Nip34Tag::Clone(self.clone).to_tag());
+            builder.tags.push(Nip34Tag::Clone(self.clone));
         }
 
         // Add branch name
         if let Some(branch_name) = self.branch_name {
-            tags.push(Nip34Tag::BranchName(branch_name).to_tag());
+            builder.tags.push(Nip34Tag::BranchName(branch_name));
         }
 
         // Add root patch event (if this is a revision)
         if let Some(root_patch) = self.root_patch_event {
-            tags.push(Tag::event(root_patch));
+            builder.tags.push(Nip01Tag::event(root_patch));
         }
 
         // Add merge base
         if let Some(merge_base) = self.merge_base {
-            tags.push(Nip34Tag::MergeBase(merge_base).to_tag());
+            builder.tags.push(Nip34Tag::MergeBase(merge_base));
         }
 
-        // Build
-        EventBuilder::new(Kind::GitPullRequest)
-            .content(self.content)
-            .tags(tags)
+        builder
     }
 }
 
@@ -726,49 +760,45 @@ impl IntoEventBuilder for GitPullRequestUpdate {
     fn into_event_builder(self) -> EventBuilder {
         let owner_public_key: PublicKey = self.repository.public_key;
 
-        // Calculate capacity: 5 required + 2 optional
-        let mut tags: Vec<Tag> = Vec::with_capacity(7);
+        let mut builder: EventBuilder = EventBuilder::new(Kind::GitPullRequestUpdate);
+
+        builder.tags.reserve(7);
 
         // Add coordinate
-        tags.push(Tag::coordinate(self.repository, None));
+        builder.tags.push(Nip01Tag::coordinate(self.repository));
 
         // Add repository owner public key
-        tags.push(Tag::public_key(owner_public_key));
+        builder.tags.push(Nip01Tag::public_key(owner_public_key));
 
-        // Add NIP-22 tags for the pull request being updated
-        tags.push(
-            Nip22Tag::Event {
-                id: self.pull_request_event,
-                relay_hint: None,
-                public_key: None,
-                uppercase: true,
-            }
-            .to_tag(),
-        );
-        tags.push(
-            Nip22Tag::PublicKey {
-                public_key: self.pull_request_author,
-                relay_hint: None,
-                uppercase: true,
-            }
-            .to_tag(),
-        );
+        // Add NIP-22 builder.tags for the pull request being updated
+        builder.tags.push(Nip22Tag::Event {
+            id: self.pull_request_event,
+            relay_hint: None,
+            public_key: None,
+            uppercase: true,
+        });
+        builder.tags.push(Nip22Tag::PublicKey {
+            public_key: self.pull_request_author,
+            relay_hint: None,
+            uppercase: true,
+        });
 
         // Add updated current commit
-        tags.push(Nip34Tag::CurrentCommit(self.current_commit).to_tag());
+        builder
+            .tags
+            .push(Nip34Tag::CurrentCommit(self.current_commit));
 
         // Add clone URLs
         if !self.clone.is_empty() {
-            tags.push(Nip34Tag::Clone(self.clone).to_tag());
+            builder.tags.push(Nip34Tag::Clone(self.clone));
         }
 
         // Add merge base
         if let Some(merge_base) = self.merge_base {
-            tags.push(Nip34Tag::MergeBase(merge_base).to_tag());
+            builder.tags.push(Nip34Tag::MergeBase(merge_base));
         }
 
-        // Build
-        EventBuilder::new(Kind::GitPullRequestUpdate).tags(tags)
+        builder
     }
 }
 
@@ -783,13 +813,8 @@ pub struct GitUserGraspList {
 
 impl IntoEventBuilder for GitUserGraspList {
     fn into_event_builder(self) -> EventBuilder {
-        let tags: Vec<Tag> = self
-            .grasp_servers
-            .into_iter()
-            .map(|url| Nip34Tag::Grasp(url).to_tag())
-            .collect();
-
-        EventBuilder::new(Kind::GitUserGraspList).tags(tags)
+        EventBuilder::new(Kind::GitUserGraspList)
+            .tags(self.grasp_servers.into_iter().map(Nip34Tag::Grasp))
     }
 }
 
@@ -848,7 +873,7 @@ mod tests {
         let parsed = Nip34Tag::parse(&tag).unwrap();
 
         assert_eq!(parsed, Nip34Tag::Head(String::from("main")));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -863,7 +888,7 @@ mod tests {
         let parsed = Nip34Tag::parse(&tag).unwrap();
 
         assert_eq!(parsed, Nip34Tag::AppliedAsCommits(vec![commit_1, commit_2]));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]

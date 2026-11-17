@@ -43,6 +43,11 @@
   and `PrivateDirectMessageBuilder::rumor_extra_tags` (https://github.com/nostrdevkit/nostr/pull/1447)
 - Add NIP-47 BIP321 methods `pay` and `receive` (https://github.com/nostrdevkit/nostr/pull/1465)
 - Add `nip67::EoseHint` and `RelayMessage::eose_with_hints` for NIP-67 EOSE messages (https://github.com/nostrdevkit/nostr/pull/1501)
+- Add `TagMut`, `TagsMut` and `TagRef`
+
+### Performance
+
+- Reduce tags allocations
 
 ### Performance
 

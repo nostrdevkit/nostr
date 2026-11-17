@@ -95,12 +95,10 @@ macro_rules! gossip_unit_tests {
 
             let keys = Keys::generate();
             let event = EventBuilder::new(Kind::TextNote).content("test")
-                .tag(Tag::from(
-                    Nip01Tag::PublicKey {
+                .tag(Nip01Tag::PublicKey {
                         public_key,
                         relay_hint: Some(relay_url.clone()),
-                    },
-                ))
+                    })
                 .finalize(&keys)
                 .unwrap();
 

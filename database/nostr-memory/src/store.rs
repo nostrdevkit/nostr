@@ -304,7 +304,7 @@ impl MemoryStore {
         } else if self.options.process_nip62
             && event.kind == Kind::RequestToVanish
             && nip62::is_valid_vanish_request_for_relay(
-                event.tags.as_slice(),
+                &event.tags,
                 self.options.relay_url.as_ref(),
             )
         {
