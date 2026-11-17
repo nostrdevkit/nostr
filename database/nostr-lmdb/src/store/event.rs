@@ -4,10 +4,10 @@
 
 use core::cmp::Ordering;
 use core::hash::{Hash, Hasher};
-use std::borrow::Cow;
+use std::slice::Iter;
 use std::str::FromStr;
 
-use flatbuffers::FlatBufferBuilder;
+use flatbuffers::{FlatBufferBuilder, ForwardsUOffset, Vector, VectorIter};
 use nostr::error::{Error, ErrorKind};
 use nostr::event::{Event, EventId, Kind, Signature, Tag, Tags};
 use nostr::filter::SingleLetterTag;
@@ -15,67 +15,147 @@ use nostr::key::PublicKey;
 use nostr::types::Timestamp;
 
 use super::error::{MissingField, StoreError};
-use crate::fbs::event_fbs;
+use crate::fbs::event_fbs::{self, StringVector};
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct DatabaseTag<'a> {
-    buf: Vec<Cow<'a, str>>,
+#[derive(Debug, Clone)]
+enum InnerTags<'a> {
+    FlatBuf(Vector<'a, ForwardsUOffset<StringVector<'a>>>),
+    Tags(&'a Tags),
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct DatabaseTags<'a>(InnerTags<'a>);
+
+impl<'a> DatabaseTags<'a> {
+    #[inline]
+    pub(crate) fn is_empty(&self) -> bool {
+        match &self.0 {
+            InnerTags::FlatBuf(vec) => vec.is_empty(),
+            InnerTags::Tags(vec) => vec.is_empty(),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn iter(&'a self) -> DatabaseTagsIter<'a> {
+        DatabaseTagsIter(match &self.0 {
+            InnerTags::FlatBuf(vec) => InnerTagsIter::FlatBuf(vec.iter()),
+            InnerTags::Tags(vec) => InnerTagsIter::Vector(vec.iter()),
+        })
+    }
+}
+
+enum InnerTagsIter<'a> {
+    FlatBuf(VectorIter<'a, ForwardsUOffset<StringVector<'a>>>),
+    Vector(Iter<'a, Tag>),
+}
+
+pub(crate) struct DatabaseTagsIter<'a>(InnerTagsIter<'a>);
+
+impl<'a> Iterator for DatabaseTagsIter<'a> {
+    type Item = DatabaseTag<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.0 {
+            InnerTagsIter::FlatBuf(iter) => loop {
+                let item: StringVector = iter.next()?;
+
+                let Some(data) = item.data() else {
+                    continue;
+                };
+
+                let Ok(tag) = DatabaseTag::new(InnerTag::FlatBuf(data)) else {
+                    continue;
+                };
+
+                return Some(tag);
+            },
+            InnerTagsIter::Vector(iter) => loop {
+                let item: &Tag = iter.next()?;
+                let data: &[String] = item.as_slice();
+
+                let Ok(tag) = DatabaseTag::new(InnerTag::Slice(data)) else {
+                    continue;
+                };
+
+                return Some(tag);
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum InnerTag<'a> {
+    FlatBuf(Vector<'a, ForwardsUOffset<&'a str>>),
+    Slice(&'a [String]),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DatabaseTag<'a>(InnerTag<'a>);
+
 impl<'a> DatabaseTag<'a> {
-    /// Parse tag
-    ///
-    /// Return error if the tag is empty!
-    pub(super) fn parse(tag: Vec<Cow<'a, str>>) -> Result<Self, Error> {
-        // Check if it's empty
-        if tag.is_empty() {
+    fn new(tag: InnerTag<'a>) -> Result<Self, Error> {
+        let is_empty: bool = match &tag {
+            InnerTag::FlatBuf(vec) => vec.is_empty(),
+            InnerTag::Slice(vec) => vec.is_empty(),
+        };
+
+        if is_empty {
             return Err(Error::with_static_message(ErrorKind::Invalid, "empty tag"));
         }
 
-        Ok(Self { buf: tag })
+        Ok(Self(tag))
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        match &self.0 {
+            InnerTag::FlatBuf(vec) => vec.len(),
+            InnerTag::Slice(vec) => vec.len(),
+        }
+    }
+
+    fn get(&self, index: usize) -> &'a str {
+        match &self.0 {
+            InnerTag::FlatBuf(vec) => vec.get(index),
+            InnerTag::Slice(vec) => vec[index].as_str(),
+        }
     }
 
     /// Get the tag kind
     #[inline]
-    pub(super) fn kind(&self) -> &str {
+    pub(super) fn kind(&self) -> &'a str {
         // SAFETY: we checked that buf is not empty
-        self.buf[0].as_ref()
+        self.get(0)
     }
 
     /// Return the **first** tag value (index `1`), if exists.
     #[inline]
-    pub(super) fn content(&self) -> Option<&str> {
-        self.buf.get(1).map(|s| s.as_ref())
+    pub(super) fn content(&self) -> Option<&'a str> {
+        if self.len() < 2 {
+            return None;
+        }
+
+        Some(self.get(1))
     }
 
     /// Extract tag name and value
-    pub(super) fn extract(&self) -> Option<(SingleLetterTag, &str)> {
-        if self.buf.len() >= 2 {
-            let tag_name: SingleLetterTag = SingleLetterTag::from_str(&self.buf[0]).ok()?;
-            let tag_value: &str = &self.buf[1];
-            Some((tag_name, tag_value))
-        } else {
-            None
+    pub(super) fn extract(&self) -> Option<(SingleLetterTag, &'a str)> {
+        if self.len() < 2 {
+            return None;
         }
+
+        let tag_name: SingleLetterTag = SingleLetterTag::from_str(self.get(0)).ok()?;
+        let tag_value: &str = self.get(1);
+        Some((tag_name, tag_value))
     }
 
-    /// Into owned tag
-    pub(super) fn into_owned(self) -> Tag {
-        let buf: Vec<String> = self.buf.into_iter().map(|t| t.into_owned()).collect();
+    fn into_owned(self) -> Tag {
+        let buf: Vec<String> = match self.0 {
+            InnerTag::FlatBuf(vec) => vec.into_iter().map(|t| t.to_string()).collect(),
+            InnerTag::Slice(vec) => vec.iter().map(|t| t.to_string()).collect(),
+        };
         // SAFETY: buf is not empty
         unsafe { Tag::new_unchecked(buf) }
-    }
-}
-
-impl<'a> From<&'a Tag> for DatabaseTag<'a> {
-    fn from(tag: &'a Tag) -> Self {
-        Self {
-            buf: tag
-                .as_slice()
-                .iter()
-                .map(|v| Cow::Borrowed(v.as_str()))
-                .collect(),
-        }
     }
 }
 
@@ -90,7 +170,7 @@ pub(crate) struct DatabaseEvent<'a> {
     /// Kind
     pub kind: u16,
     /// Tag list
-    pub tags: Vec<DatabaseTag<'a>>,
+    pub tags: DatabaseTags<'a>,
     /// Content
     pub content: &'a str,
     /// Signature
@@ -134,7 +214,7 @@ impl<'a> DatabaseEvent<'a> {
         self.tags
             .iter()
             .find(|tag| tag.kind() == "expiration")
-            .and_then(DatabaseTag::content)
+            .and_then(|t| t.content())
             .and_then(|timestamp| Timestamp::from_str(timestamp).ok())
             .is_some_and(|expiration| expiration < now)
     }
@@ -145,13 +225,7 @@ impl<'a> DatabaseEvent<'a> {
         let fb_tags = ev
             .tags()
             .ok_or(StoreError::FlatBufFieldNotFound(MissingField::Tags))?;
-        let mut tags = Vec::with_capacity(fb_tags.len());
-
-        for tag in fb_tags.iter().filter_map(|t| t.data()) {
-            tags.push(DatabaseTag::parse(
-                tag.into_iter().map(Cow::Borrowed).collect(),
-            )?);
-        }
+        let tags = DatabaseTags(InnerTags::FlatBuf(fb_tags));
 
         Ok(Self {
             id: &ev
@@ -185,15 +259,11 @@ impl<'a> DatabaseEvent<'a> {
             .tags
             .iter()
             .map(|t| {
-                let tags = t
-                    .buf
-                    .iter()
-                    .map(|t| fbb.create_string(t))
-                    .collect::<Vec<_>>();
+                let data: Vec<_> = (0..t.len()).map(|i| fbb.create_string(t.get(i))).collect();
                 let args = event_fbs::StringVectorArgs {
-                    data: Some(fbb.create_vector(&tags)),
+                    data: Some(fbb.create_vector(&data)),
                 };
-                event_fbs::StringVector::create(fbb, &args)
+                StringVector::create(fbb, &args)
             })
             .collect::<Vec<_>>();
         let args = event_fbs::EventArgs {
@@ -233,7 +303,7 @@ impl<'a> DatabaseEvent<'a> {
             PublicKey::from_byte_array(*self.pubkey),
             self.created_at,
             Kind::from_u16(self.kind),
-            Tags::from_list(self.tags.into_iter().map(|t| t.into_owned()).collect()),
+            Tags::from_list(self.tags.iter().map(|t| t.into_owned()).collect()),
             self.content,
             // SAFETY: signature panic only if it's not 64 byte long
             Signature::from_slice(self.sig.as_slice()).expect("valid signature"),
@@ -248,7 +318,7 @@ impl<'a> From<&'a Event> for DatabaseEvent<'a> {
             pubkey: event.pubkey.as_bytes(),
             created_at: event.created_at,
             kind: event.kind.as_u16(),
-            tags: event.tags.iter().map(DatabaseTag::from).collect(),
+            tags: DatabaseTags(InnerTags::Tags(&event.tags)),
             content: &event.content,
             sig: event.sig.as_ref(),
         }
