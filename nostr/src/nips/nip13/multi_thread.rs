@@ -139,7 +139,7 @@ pub mod tests {
 
     #[test]
     fn threaded_adapter() {
-        let unsigned = EventBuilder::new(Kind::TextNote, "Wait, you guys are getting paid to find nonces? I'm just doing it for the leading zeros")
+        let unsigned = EventBuilder::new(Kind::TextNote).content("Wait, you guys are getting paid to find nonces? I'm just doing it for the leading zeros")
             .finalize_unsigned(PublicKey::from_slice(&[0; 32]).unwrap());
 
         let unsigned = unsigned
@@ -158,7 +158,8 @@ pub mod tests {
     #[test]
     fn multi_thread_mining_can_be_cancelled() {
         let cancel: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
-        let unsigned = EventBuilder::new(Kind::TextNote, "multi thread cancellation test")
+        let unsigned = EventBuilder::new(Kind::TextNote)
+            .content("multi thread cancellation test")
             .finalize_unsigned(PublicKey::from_slice(&[0; 32]).unwrap());
 
         let worker_cancel: Arc<AtomicBool> = cancel.clone();
