@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nostr::key::Keys;
-use nostr::nips::nip46::NostrConnectUri;
+use nostr::nips::nip46::{NostrConnectMetadata, NostrConnectUri};
 use nostr_sdk::client::Client;
 
 use crate::client::{AuthUrlHandler, NostrConnect};
@@ -23,6 +23,7 @@ pub struct NostrConnectBuilder {
     // An optional custom client, constructed externally
     pub(crate) client: Option<Client>,
     pub(crate) auth_url_handler: Option<Arc<dyn AuthUrlHandler>>,
+    pub(crate) metadata: Option<NostrConnectMetadata>,
 }
 
 impl NostrConnectBuilder {
@@ -34,6 +35,7 @@ impl NostrConnectBuilder {
             timeout: DEFAULT_TIMEOUT,
             client: None,
             auth_url_handler: None,
+            metadata: None,
         }
     }
 
@@ -48,6 +50,15 @@ impl NostrConnectBuilder {
     #[inline]
     pub fn client(mut self, client: Client) -> Self {
         self.client = Some(client);
+        self
+    }
+
+    /// Set the client metadata, sent as the 4th `connect` param when the
+    /// connection is initiated through a `bunker://` URI, so the remote
+    /// signer can identify and label the connection (NIP-46).
+    #[inline]
+    pub fn client_metadata(mut self, metadata: NostrConnectMetadata) -> Self {
+        self.metadata = Some(metadata);
         self
     }
 
@@ -95,5 +106,27 @@ impl NostrConnectBuilder {
     #[inline]
     pub fn build(self) -> Result<NostrConnect, Error> {
         NostrConnect::from_builder(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nostr::types::Url;
+
+    use super::*;
+
+    #[test]
+    fn test_client_metadata() {
+        let uri = NostrConnectUri::parse(
+            "bunker://79dff8f82963424e0bb02708a22e44b4980893e3a4be0fa3cb60a43b946764e3?relay=wss://relay.nsec.app",
+        )
+        .unwrap();
+        let builder = NostrConnectBuilder::new(uri, Keys::generate());
+        assert!(builder.metadata.is_none());
+
+        let metadata =
+            NostrConnectMetadata::new("Satori").url(Url::parse("https://satori.example").unwrap());
+        let builder = builder.client_metadata(metadata.clone());
+        assert_eq!(builder.metadata, Some(metadata));
     }
 }

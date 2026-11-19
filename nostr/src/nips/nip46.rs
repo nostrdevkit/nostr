@@ -31,6 +31,7 @@ use crate::event::{
     UnsignedEvent,
 };
 use crate::key::{AsyncGetPublicKey, GetPublicKey, PublicKey};
+use crate::types::url::form_urlencoded::byte_serialize;
 use crate::types::url::{RelayUrl, Url};
 #[cfg(all(feature = "std", feature = "os-rng"))]
 use crate::util;
@@ -138,6 +139,11 @@ pub enum NostrConnectRequest {
         remote_signer_public_key: PublicKey,
         /// Optional secret
         secret: Option<String>,
+        /// Optional client metadata
+        ///
+        /// Per NIP-46, clients SHOULD include it in the `bunker://` flow, since that
+        /// token carries no information identifying the client.
+        metadata: Option<NostrConnectMetadata>,
     },
     /// Get public key
     GetPublicKey,
@@ -181,10 +187,12 @@ impl fmt::Debug for NostrConnectRequest {
             Self::Connect {
                 remote_signer_public_key,
                 secret,
+                metadata,
             } => f
                 .debug_struct("Connect")
                 .field("remote_signer_public_key", remote_signer_public_key)
                 .field("secret", &secret.as_ref().map(|_| "[REDACTED]"))
+                .field("metadata", metadata)
                 .finish(),
             Self::GetPublicKey => f.write_str("GetPublicKey"),
             Self::SignEvent(_) => f.debug_tuple("SignEvent").field(&"[REDACTED]").finish(),
@@ -221,10 +229,15 @@ impl NostrConnectRequest {
                 let remote_signer_public_key: &String = params.first().ok_or(invalid_request())?;
                 let remote_signer_public_key: PublicKey =
                     PublicKey::from_hex(remote_signer_public_key)?;
-                let secret: Option<String> = params.get(1).cloned();
+                let secret: Option<String> = params.get(1).filter(|s| !s.is_empty()).cloned();
+                let metadata: Option<NostrConnectMetadata> = params
+                    .get(3)
+                    .filter(|s| !s.is_empty())
+                    .and_then(|s| parse_json(s).ok());
                 Ok(Self::Connect {
                     remote_signer_public_key,
                     secret,
+                    metadata,
                 })
             }
             NostrConnectMethod::GetPublicKey => Ok(Self::GetPublicKey),
@@ -297,10 +310,21 @@ impl NostrConnectRequest {
             Self::Connect {
                 remote_signer_public_key,
                 secret,
+                metadata,
             } => {
                 let mut params = vec![remote_signer_public_key.to_hex()];
                 if let Some(secret) = secret {
                     params.push(secret.to_owned());
+                }
+                if let Some(metadata) = metadata {
+                    // Positional params: the metadata occupies the 4th position, so an
+                    // empty string must be passed for `optional_requested_perms` (and
+                    // for the secret, when absent), per NIP-46.
+                    if params.len() == 1 {
+                        params.push(String::new());
+                    }
+                    params.push(String::new());
+                    params.push(metadata.as_json());
                 }
                 params
             }
@@ -948,6 +972,9 @@ impl NostrConnectUri {
 
                     let mut relays: Vec<RelayUrl> = Vec::new();
                     let mut metadata: Option<NostrConnectMetadata> = None;
+                    let mut name: Option<String> = None;
+                    let mut url: Option<Url> = None;
+                    let mut image: Option<Url> = None;
                     let mut secret: Option<String> = None;
 
                     for (key, value) in uri.query_pairs() {
@@ -960,12 +987,41 @@ impl NostrConnectUri {
                                 let value = value.to_string();
                                 metadata = Some(parse_json(&value)?);
                             }
+                            // Flat params, as the NIP-46 spec defines. The spec's
+                            // `image` maps to the metadata's icons list.
+                            Cow::Borrowed("name") => {
+                                name = Some(value.to_string());
+                            }
+                            Cow::Borrowed("url") => {
+                                url = Some(Url::parse(&value).map_err(Error::malformed)?);
+                            }
+                            Cow::Borrowed("image") => {
+                                image = Some(Url::parse(&value).map_err(Error::malformed)?);
+                            }
                             Cow::Borrowed("secret") => {
                                 secret = Some(value.to_string());
                             }
                             _ => (),
                         }
                     }
+
+                    // Flat params take precedence over the legacy `metadata=` blob
+                    // only when the blob is absent: URIs from older nostr-sdk
+                    // versions keep parsing as they did.
+                    let metadata = match (metadata, name) {
+                        (Some(metadata), _) => Some(metadata),
+                        (None, Some(name)) => {
+                            let mut metadata = NostrConnectMetadata::new(name);
+                            if let Some(url) = url {
+                                metadata = metadata.url(url);
+                            }
+                            if let Some(image) = image {
+                                metadata = metadata.icons(vec![image]);
+                            }
+                            Some(metadata)
+                        }
+                        (None, None) => None,
+                    };
 
                     if let (Some(metadata), Some(secret)) = (metadata, secret) {
                         return Ok(Self::Client {
@@ -1151,21 +1207,35 @@ impl fmt::Display for NostrConnectUri {
                 metadata,
                 secret,
             } => {
-                let mut relays_str: String = String::new();
+                // Flat query params, as the NIP-46 spec defines: relay, name, url,
+                // secret. The `description` and `icons` metadata fields have no flat
+                // query-param slot in the spec, so they don't round-trip through the
+                // URI (they still do through the `connect` request metadata).
+                let mut query: String = String::new();
 
                 for relay_url in relays.iter() {
                     let relay_url: &str = relay_url.as_str_without_trailing_slash();
 
-                    relays_str.push_str("&relay=");
-                    relays_str.push_str(relay_url);
+                    if !query.is_empty() {
+                        query.push('&');
+                    }
+
+                    query.push_str("relay=");
+                    query.extend(byte_serialize(relay_url.as_bytes()));
                 }
 
-                write!(
-                    f,
-                    "{NOSTR_CONNECT_URI_SCHEME}://{}?metadata={}{relays_str}&secret={secret}",
-                    public_key,
-                    metadata.as_json()
-                )
+                query.push_str("&name=");
+                query.extend(byte_serialize(metadata.name.as_bytes()));
+
+                if let Some(url) = &metadata.url {
+                    query.push_str("&url=");
+                    query.extend(byte_serialize(url.as_str().as_bytes()));
+                }
+
+                query.push_str("&secret=");
+                query.extend(byte_serialize(secret.as_bytes()));
+
+                write!(f, "{NOSTR_CONNECT_URI_SCHEME}://{public_key}?{query}")
             }
         }
     }
@@ -1285,7 +1355,9 @@ mod test {
 
     #[test]
     fn test_client_uri_serialization() {
-        let uri = r#"nostrconnect://b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4?metadata={"name":"Example"}&relay=wss://relay.damus.io&secret=abcd1234"#;
+        // Flat query params, as the NIP-46 spec defines (percent-encoded, like the
+        // spec's own example: relay=wss%3A%2F%2Frelay1.example.com)
+        let uri = r#"nostrconnect://b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4?relay=wss%3A%2F%2Frelay.damus.io&name=Example&secret=abcd1234"#;
 
         let pubkey =
             PublicKey::parse("b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4")
@@ -1297,6 +1369,117 @@ mod test {
                 .to_string(),
             uri
         );
+    }
+
+    #[test]
+    fn test_parse_client_uri_flat_params() {
+        // Spec-shaped URI: flat name/url/image params, no legacy `metadata=` blob
+        let uri = r#"nostrconnect://b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4?relay=wss%3A%2F%2Frelay1.example.com&name=My+Client&url=https%3A%2F%2Fexample.com&image=https%3A%2F%2Fexample.com%2Ficon.png&secret=0s8j2djs"#;
+        let uri = NostrConnectUri::parse(uri).unwrap();
+
+        let pubkey =
+            PublicKey::parse("b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4")
+                .unwrap();
+        let relay_url = RelayUrl::parse("wss://relay1.example.com").unwrap();
+        assert_eq!(
+            uri,
+            NostrConnectUri::Client {
+                public_key: pubkey,
+                relays: vec![relay_url],
+                metadata: NostrConnectMetadata::new("My Client")
+                    .url(Url::parse("https://example.com").unwrap())
+                    .icons(vec![Url::parse("https://example.com/icon.png").unwrap()]),
+                secret: "0s8j2djs".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_client_uri_serialization_multiple_relays() {
+        // One flat `relay=` param per relay, as the NIP-46 spec defines
+        let pubkey =
+            PublicKey::parse("b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4")
+                .unwrap();
+        let relay1 = RelayUrl::parse("wss://relay.damus.io").unwrap();
+        let relay2 = RelayUrl::parse("wss://nos.lol").unwrap();
+        let uri =
+            NostrConnectUri::client_with_secret(pubkey, [relay1, relay2], "Example", "abcd1234");
+
+        assert_eq!(
+            uri.to_string(),
+            r#"nostrconnect://b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4?relay=wss%3A%2F%2Frelay.damus.io&relay=wss%3A%2F%2Fnos.lol&name=Example&secret=abcd1234"#
+        );
+
+        // Round-trip
+        assert_eq!(NostrConnectUri::parse(uri.to_string()).unwrap(), uri);
+    }
+
+    #[test]
+    fn test_client_uri_serialization_with_url() {
+        // The metadata's `url` gets a flat `url=` param, percent-encoded like the
+        // spec's own example
+        let pubkey =
+            PublicKey::parse("b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4")
+                .unwrap();
+        let relay_url = RelayUrl::parse("wss://relay.damus.io").unwrap();
+        let uri = NostrConnectUri::Client {
+            public_key: pubkey,
+            relays: vec![relay_url],
+            metadata: NostrConnectMetadata::new("Example")
+                .url(Url::parse("https://example.com").unwrap()),
+            secret: "abcd1234".to_string(),
+        };
+
+        assert_eq!(
+            uri.to_string(),
+            r#"nostrconnect://b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4?relay=wss%3A%2F%2Frelay.damus.io&name=Example&url=https%3A%2F%2Fexample.com%2F&secret=abcd1234"#
+        );
+
+        // Round-trip
+        assert_eq!(NostrConnectUri::parse(uri.to_string()).unwrap(), uri);
+    }
+
+    #[test]
+    fn test_parse_client_uri_legacy_blob_takes_precedence() {
+        // Both the legacy `metadata=` blob and the flat params present: the blob
+        // wins, so URIs from older nostr-sdk versions keep parsing as they did
+        let uri = r#"nostrconnect://b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4?metadata={"name":"Legacy"}&name=Flat&secret=0s8j2djs"#;
+        let uri = NostrConnectUri::parse(uri).unwrap();
+
+        match uri {
+            NostrConnectUri::Client { metadata, .. } => {
+                assert_eq!(metadata.name, "Legacy");
+                assert_eq!(metadata.url, None);
+            }
+            _ => panic!("expected client URI"),
+        }
+    }
+
+    #[test]
+    fn test_parse_client_uri_without_name_fails() {
+        // No `name` and no legacy blob: no metadata can be reconstructed, the
+        // URI is invalid
+        let uri = r#"nostrconnect://b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4?relay=wss%3A%2F%2Frelay.damus.io&url=https%3A%2F%2Fexample.com&secret=0s8j2djs"#;
+        assert!(NostrConnectUri::parse(uri).is_err());
+    }
+
+    #[test]
+    fn test_debug_connect_redacts_secret() {
+        // The connect request's secret is redacted; the client metadata is
+        // display info and shows as-is
+        let request = NostrConnectRequest::Connect {
+            remote_signer_public_key: PublicKey::parse(
+                "79dff8f82963424e0bb02708a22e44b4980893e3a4be0fa3cb60a43b946764e3",
+            )
+            .unwrap(),
+            secret: Some(String::from("connection-secret")),
+            metadata: Some(NostrConnectMetadata::new("Satori")),
+        };
+
+        let debug = format!("{request:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("connection-secret"));
+        assert!(debug.contains("Satori"));
     }
 
     #[test]
@@ -1378,7 +1561,37 @@ mod test {
                 )
                 .unwrap(),
                 secret: None,
+                metadata: None,
             }
+        );
+
+        // Connect with positional client metadata: empty secret and perms slots so
+        // the metadata occupies the 4th position (NIP-46).
+        let json = r#"{"id":"2845841890","method":"connect","params":["79dff8f82963424e0bb02708a22e44b4980893e3a4be0fa3cb60a43b946764e3","","","{\"name\":\"Satori\",\"url\":\"https://satori.example\"}"]}"#;
+        let message = NostrConnectMessage::from_json(json).unwrap();
+        let req = message.to_request().unwrap();
+        assert_eq!(
+            req,
+            NostrConnectRequest::Connect {
+                remote_signer_public_key: PublicKey::from_hex(
+                    "79dff8f82963424e0bb02708a22e44b4980893e3a4be0fa3cb60a43b946764e3"
+                )
+                .unwrap(),
+                secret: None,
+                metadata: Some(
+                    NostrConnectMetadata::new("Satori")
+                        .url(Url::parse("https://satori.example").unwrap())
+                ),
+            }
+        );
+        assert_eq!(
+            req.params(),
+            vec![
+                "79dff8f82963424e0bb02708a22e44b4980893e3a4be0fa3cb60a43b946764e3".to_string(),
+                String::new(),
+                String::new(),
+                r#"{"name":"Satori","url":"https://satori.example/"}"#.to_string(),
+            ]
         );
 
         // Connect ACK

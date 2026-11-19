@@ -14,8 +14,8 @@ use async_utility::time;
 use nostr::nips::nip04::AsyncNip04;
 use nostr::nips::nip44::{self, AsyncNip44};
 use nostr::nips::nip46::{
-    NostrConnectEventBuilder, NostrConnectMessage, NostrConnectMethod, NostrConnectRequest,
-    NostrConnectResponse, NostrConnectUri, ResponseResult,
+    NostrConnectEventBuilder, NostrConnectMessage, NostrConnectMetadata, NostrConnectMethod,
+    NostrConnectRequest, NostrConnectResponse, NostrConnectUri, ResponseResult,
 };
 use nostr::types::Url;
 use nostr_sdk::prelude::*;
@@ -36,6 +36,7 @@ pub struct NostrConnect {
     client: Client,
     timeout: Duration,
     auth_url_handler: Option<Arc<dyn AuthUrlHandler>>,
+    metadata: Option<NostrConnectMetadata>,
 }
 
 impl NostrConnect {
@@ -71,6 +72,7 @@ impl NostrConnect {
             // If the URI is bunker, the remote_signer_public_key is set in the bootstrap method.
             remote_signer_public_key: OnceCell::new(),
             user_public_key: OnceCell::new(),
+            metadata: builder.metadata,
         })
     }
 
@@ -107,7 +109,7 @@ impl NostrConnect {
 
         // Send `connect` command if bunker URI
         if let NostrConnectUri::Bunker { secret, .. } = &self.uri {
-            self.connect_bunker(remote_signer_public_key, secret)
+            self.connect_bunker(remote_signer_public_key, secret, self.metadata.clone())
                 .await?;
         }
 
@@ -258,10 +260,12 @@ impl NostrConnect {
         &self,
         remote_signer_public_key: PublicKey,
         secret: &Option<String>,
+        metadata: Option<NostrConnectMetadata>,
     ) -> Result<(), Error> {
         let req = NostrConnectRequest::Connect {
             remote_signer_public_key,
             secret: secret.clone(),
+            metadata,
         };
         let res: ResponseResult = self
             .send_request_with_pk(req, remote_signer_public_key)
@@ -523,6 +527,8 @@ impl AsyncNip44 for NostrConnect {
 
 #[cfg(test)]
 mod tests {
+    use nostr_sdk::local_relay::MockRelay;
+
     use super::*;
 
     #[test]
@@ -564,5 +570,123 @@ mod tests {
             &ResponseResult::Error,
             "secret"
         ));
+    }
+
+    #[test]
+    fn test_builder_metadata_is_carried() {
+        let keys = Keys::generate();
+        // Client URI: the URI public key must match the app keys
+        let uri = NostrConnectUri::Client {
+            public_key: keys.public_key(),
+            relays: Vec::new(),
+            metadata: NostrConnectMetadata::new("Example"),
+            secret: String::from("secret"),
+        };
+
+        let metadata = NostrConnectMetadata::new("Satori");
+        let connect = NostrConnect::builder(uri, keys)
+            .client_metadata(metadata.clone())
+            .build()
+            .unwrap();
+
+        assert_eq!(connect.metadata, Some(metadata));
+    }
+
+    #[tokio::test]
+    async fn test_connect_bunker_sends_client_metadata() {
+        let relay = MockRelay::run().await.unwrap();
+        let relay_url = relay.url().await;
+
+        let signer_keys = Keys::generate();
+        let client_keys = Keys::generate();
+
+        let metadata =
+            NostrConnectMetadata::new("Satori").url(Url::parse("https://satori.example").unwrap());
+
+        let uri = NostrConnectUri::Bunker {
+            remote_signer_public_key: signer_keys.public_key(),
+            relays: vec![relay_url.clone()],
+            secret: None,
+        };
+
+        // Give the mock signer time to subscribe before the client sends the
+        // `connect` request
+        let signer = tokio::spawn(run_mock_signer(
+            signer_keys.clone(),
+            relay_url,
+            metadata.clone(),
+        ));
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let connect = NostrConnect::builder(uri, client_keys)
+            .client_metadata(metadata)
+            .timeout(Duration::from_secs(10))
+            .build()
+            .unwrap();
+
+        // Bootstrap: the `connect` request rides through the mock signer, then
+        // the `get_public_key` request
+        let pk = connect.get_public_key_async().await.unwrap();
+        assert_eq!(pk, signer_keys.public_key());
+
+        signer.abort();
+    }
+
+    async fn run_mock_signer(
+        signer_keys: Keys,
+        relay_url: RelayUrl,
+        expected_metadata: NostrConnectMetadata,
+    ) {
+        let client = Client::new();
+        client.add_relay(relay_url).and_connect().await.unwrap();
+
+        let filter = Filter::new()
+            .pubkey(signer_keys.public_key())
+            .kind(Kind::NostrConnect)
+            .limit(0);
+        let mut notifications = client.notifications();
+        client.subscribe(filter).await.unwrap();
+
+        while let Some(notification) = notifications.next().await {
+            if let ClientNotification::Event { event, .. } = notification {
+                if event.kind != Kind::NostrConnect {
+                    continue;
+                }
+
+                let msg: String =
+                    nip44::decrypt(signer_keys.secret_key(), &event.pubkey, &event.content)
+                        .unwrap();
+                let msg = NostrConnectMessage::from_json(msg).unwrap();
+                let req_id = msg.id().to_string();
+
+                let result = match msg.to_request().unwrap() {
+                    NostrConnectRequest::Connect {
+                        remote_signer_public_key,
+                        secret,
+                        metadata,
+                    } => {
+                        // The `connect` request carries the client metadata as
+                        // its 4th param
+                        assert_eq!(remote_signer_public_key, signer_keys.public_key());
+                        assert_eq!(secret, None);
+                        assert_eq!(metadata, Some(expected_metadata.clone()));
+                        ResponseResult::Ack
+                    }
+                    NostrConnectRequest::GetPublicKey => {
+                        ResponseResult::GetPublicKey(signer_keys.public_key())
+                    }
+                    req => panic!("unexpected request: {req:?}"),
+                };
+
+                let response = NostrConnectMessage::response(
+                    req_id,
+                    NostrConnectResponse::new(Some(result), None),
+                );
+                let event = NostrConnectEventBuilder::new(event.pubkey, response)
+                    .finalize(&signer_keys)
+                    .unwrap();
+                client.send_event(&event).await.unwrap();
+            }
+        }
     }
 }
