@@ -310,3 +310,117 @@ mod tests {
         tags.dedup();
     }
 }
+
+#[cfg(bench)]
+mod benches {
+    use test::{Bencher, black_box};
+
+    use super::*;
+
+    fn sample_str_tags() -> Vec<&'static [&'static str]> {
+        vec![
+            &["d", "1737226417:my-beautiful-event"],
+            &[
+                "e",
+                "378f145897eea948952674269945e88612420db35791784abf0616b4fed56ef7",
+                "wss://relay.damus.io",
+            ],
+            &[
+                "p",
+                "13adc511de7e1cfcf1c6b7f6365fb5a03442d7bcacf565ea57fa7770912c023d",
+                "wss://nostr.oxtr.dev",
+            ],
+            &[
+                "a",
+                "30023:a695f6b60119d9521934a691347d9f78e8770b56da16bb255ee286ddf9fda919:ipsum",
+            ],
+            &["t", "nostr"],
+            &["t", "bitcoin"],
+            &["expiration", "1728728536"],
+            &["r", "wss://relay.damus.io", ""],
+            &["content-warning", "reason"],
+            &["subject", "A beautiful subject"],
+        ]
+    }
+
+    fn sample_tags() -> Vec<Tag> {
+        sample_str_tags()
+            .iter()
+            .map(|tag| Tag::parse(tag.iter().copied()).unwrap())
+            .collect()
+    }
+
+    #[bench]
+    pub fn parse(bh: &mut Bencher) {
+        bh.iter(|| {
+            let sample = sample_str_tags();
+            let tags = sample.iter().map(|tag| tag.iter().copied());
+            black_box(Tags::parse(tags).unwrap());
+        });
+    }
+
+    #[bench]
+    pub fn pack_from_list(bh: &mut Bencher) {
+        bh.iter(|| {
+            let tags: Vec<Tag> = sample_tags();
+            black_box(Tags::from_list(tags));
+        });
+    }
+
+    #[bench]
+    pub fn clone(bh: &mut Bencher) {
+        let tags: Tags = Tags::from_list(sample_tags());
+        bh.iter(|| {
+            black_box(tags.clone());
+        });
+    }
+
+    #[bench]
+    pub fn to_vec(bh: &mut Bencher) {
+        let tags: Tags = Tags::from_list(sample_tags());
+        bh.iter(|| {
+            black_box(tags.clone().to_vec());
+        });
+    }
+
+    #[bench]
+    pub fn iter(bh: &mut Bencher) {
+        let tags: Tags = Tags::from_list(sample_tags());
+        bh.iter(|| {
+            black_box(tags.iter().count());
+        });
+    }
+
+    #[bench]
+    pub fn hashtags(bh: &mut Bencher) {
+        let tags: Tags = Tags::from_list(sample_tags());
+        bh.iter(|| {
+            black_box(tags.hashtags().collect::<Vec<&str>>());
+        });
+    }
+
+    #[bench]
+    pub fn identifier(bh: &mut Bencher) {
+        let tags: Tags = Tags::from_list(sample_tags());
+        bh.iter(|| {
+            black_box(tags.identifier());
+        });
+    }
+
+    #[bench]
+    pub fn serialize(bh: &mut Bencher) {
+        let tags: Tags = Tags::from_list(sample_tags());
+        bh.iter(|| {
+            black_box(serde_json::to_string(&tags).unwrap());
+        });
+    }
+
+    #[bench]
+    pub fn deserialize(bh: &mut Bencher) {
+        let tags: Tags = Tags::from_list(sample_tags());
+        let json: String = serde_json::to_string(&tags).unwrap();
+        bh.iter(|| {
+            black_box(serde_json::from_str::<Tags>(&json).unwrap());
+        });
+    }
+}
