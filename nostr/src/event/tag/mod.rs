@@ -603,17 +603,6 @@ mod benches {
     }
 
     #[bench]
-    pub fn parse_p_standardized_tag(bh: &mut Bencher) {
-        let tag = &[
-            "p",
-            "13adc511de7e1cfcf1c6b7f6365fb5a03442d7bcacf565ea57fa7770912c023d",
-        ];
-        bh.iter(|| {
-            black_box(TagStandard::parse(tag)).unwrap();
-        });
-    }
-
-    #[bench]
     pub fn parse_e_tag(bh: &mut Bencher) {
         let tag = [
             "e",
@@ -622,18 +611,6 @@ mod benches {
         ];
         bh.iter(|| {
             black_box(Tag::parse(tag)).unwrap();
-        });
-    }
-
-    #[bench]
-    pub fn parse_e_standardized_tag(bh: &mut Bencher) {
-        let tag = &[
-            "e",
-            "378f145897eea948952674269945e88612420db35791784abf0616b4fed56ef7",
-            "wss://relay.damus.io",
-        ];
-        bh.iter(|| {
-            black_box(TagStandard::parse(tag)).unwrap();
         });
     }
 
@@ -654,18 +631,6 @@ mod benches {
         let tag = ["t", "test"];
         bh.iter(|| {
             black_box(Tag::parse(tag)).unwrap();
-        });
-    }
-
-    #[bench]
-    pub fn parse_a_standardized_tag(bh: &mut Bencher) {
-        let tag = &[
-            "a",
-            "30023:a695f6b60119d9521934a691347d9f78e8770b56da16bb255ee286ddf9fda919:ipsum",
-            "wss://relay.nostr.org",
-        ];
-        bh.iter(|| {
-            black_box(TagStandard::parse(tag)).unwrap();
         });
     }
 }

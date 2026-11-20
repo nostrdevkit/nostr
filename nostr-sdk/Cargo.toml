@@ -112,6 +112,3 @@ required-features = ["local-relay"]
 [[example]]
 name = "local-relay-simple"
 required-features = ["local-relay"]
-
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(bench)'] }

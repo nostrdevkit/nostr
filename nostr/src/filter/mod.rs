@@ -1189,11 +1189,10 @@ mod tests {
 mod benches {
     use core::str::FromStr;
 
-    use secp256k1::schnorr::Signature;
     use test::{Bencher, black_box};
 
     use super::*;
-    use crate::{Tag, TagStandard};
+    use crate::event::Signature;
 
     #[bench]
     pub fn filter_match_event(bh: &mut Bencher) {
@@ -1210,7 +1209,7 @@ mod benches {
                     Tag::public_key(PublicKey::from_hex("b2d670de53b27691c0c3400225b65c35a26d06093bcc41f48ffc71e0907f9d4a").unwrap()),
                     Tag::public_key(PublicKey::from_hex("379e863e8357163b5bce5d2688dc4f1dcc2d505222fb8d74db600f30535dfdfe").unwrap()),
                     Tag::event(EventId::from_hex("7469af3be8c8e06e1b50ef1caceba30392ddc0b6614507398b7d7daa4c218e96").unwrap()),
-                    Tag::from_standardized(TagStandard::Kind { kind: Kind::TextNote, uppercase: false }),
+                    Tag::custom("k", [Kind::TextNote.to_string()]),
                 ],
                 "#JoininBox is a minimalistic, security focused Linux environment for #JoinMarket with a terminal based graphical menu.\n\nnostr:npub14tq8m9ggnnn2muytj9tdg0q6f26ef3snpd7ukyhvrxgq33vpnghs8shy62 👍🧡\n\nhttps://www.nobsbitcoin.com/joininbox-v0-8-0/",
                 Signature::from_str("273a9cd5d11455590f4359500bccb7a89428262b96b3ea87a756b770964472f8c3e87f5d5e64d8d2e859a71462a3f477b554565c4f2f326cb01dd7620db71502").unwrap(),
