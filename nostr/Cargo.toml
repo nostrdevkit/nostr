@@ -101,6 +101,10 @@ name = "nip05"
 required-features = ["std"]
 
 [[example]]
+name = "nip05namecoin"
+required-features = ["std"]
+
+[[example]]
 name = "nip06"
 required-features = ["std", "nip06"]
 
