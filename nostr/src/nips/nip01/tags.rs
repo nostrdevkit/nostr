@@ -396,3 +396,33 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::Missing);
     }
 }
+
+#[cfg(bench)]
+mod benches {
+    use test::{Bencher, black_box};
+
+    use super::*;
+
+    #[bench]
+    pub fn nip01_e_to_tag(bh: &mut Bencher) {
+        let id = EventId::all_zeros();
+        let tag: Nip01Tag = Nip01Tag::Event {
+            id,
+            relay_hint: None,
+            public_key: None,
+        };
+        bh.iter(|| {
+            let tag: Tag = (&tag).into();
+            black_box(tag);
+        });
+    }
+
+    #[bench]
+    pub fn nip01_d_to_tag(bh: &mut Bencher) {
+        let tag: Nip01Tag = Nip01Tag::Identifier(String::from("test"));
+        bh.iter(|| {
+            let tag: Tag = (&tag).into();
+            black_box(tag);
+        });
+    }
+}
