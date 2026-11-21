@@ -227,6 +227,12 @@ impl AsRef<[Tag]> for Tags {
     }
 }
 
+impl From<Vec<Tag>> for Tags {
+    fn from(tags: Vec<Tag>) -> Self {
+        Self::from_list(tags)
+    }
+}
+
 impl IntoIterator for Tags {
     type Item = Tag;
     type IntoIter = IntoIter<Self::Item>;
@@ -352,8 +358,8 @@ mod benches {
 
     #[bench]
     pub fn parse(bh: &mut Bencher) {
+        let sample = sample_str_tags();
         bh.iter(|| {
-            let sample = sample_str_tags();
             let tags = sample.iter().map(|tag| tag.iter().copied());
             black_box(Tags::parse(tags).unwrap());
         });
@@ -361,15 +367,15 @@ mod benches {
 
     #[bench]
     pub fn pack_from_list(bh: &mut Bencher) {
+        let tags: Vec<Tag> = sample_tags();
         bh.iter(|| {
-            let tags: Vec<Tag> = sample_tags();
-            black_box(Tags::from_list(tags));
+            black_box(Tags::from(tags.clone()));
         });
     }
 
     #[bench]
     pub fn clone(bh: &mut Bencher) {
-        let tags: Tags = Tags::from_list(sample_tags());
+        let tags: Tags = Tags::from(sample_tags());
         bh.iter(|| {
             black_box(tags.clone());
         });
@@ -377,7 +383,7 @@ mod benches {
 
     #[bench]
     pub fn to_vec(bh: &mut Bencher) {
-        let tags: Tags = Tags::from_list(sample_tags());
+        let tags: Tags = Tags::from(sample_tags());
         bh.iter(|| {
             black_box(tags.clone().to_vec());
         });
@@ -385,7 +391,7 @@ mod benches {
 
     #[bench]
     pub fn iter(bh: &mut Bencher) {
-        let tags: Tags = Tags::from_list(sample_tags());
+        let tags: Tags = Tags::from(sample_tags());
         bh.iter(|| {
             black_box(tags.iter().count());
         });
@@ -393,7 +399,7 @@ mod benches {
 
     #[bench]
     pub fn hashtags(bh: &mut Bencher) {
-        let tags: Tags = Tags::from_list(sample_tags());
+        let tags: Tags = Tags::from(sample_tags());
         bh.iter(|| {
             black_box(tags.hashtags().collect::<Vec<&str>>());
         });
@@ -401,7 +407,7 @@ mod benches {
 
     #[bench]
     pub fn identifier(bh: &mut Bencher) {
-        let tags: Tags = Tags::from_list(sample_tags());
+        let tags: Tags = Tags::from(sample_tags());
         bh.iter(|| {
             black_box(tags.identifier());
         });
@@ -409,7 +415,7 @@ mod benches {
 
     #[bench]
     pub fn serialize(bh: &mut Bencher) {
-        let tags: Tags = Tags::from_list(sample_tags());
+        let tags: Tags = Tags::from(sample_tags());
         bh.iter(|| {
             black_box(serde_json::to_string(&tags).unwrap());
         });
@@ -417,10 +423,20 @@ mod benches {
 
     #[bench]
     pub fn deserialize(bh: &mut Bencher) {
-        let tags: Tags = Tags::from_list(sample_tags());
+        let tags: Tags = Tags::from(sample_tags());
         let json: String = serde_json::to_string(&tags).unwrap();
         bh.iter(|| {
             black_box(serde_json::from_str::<Tags>(&json).unwrap());
+        });
+    }
+
+    #[bench]
+    pub fn get_all(bh: &mut Bencher) {
+        let tags: Tags = Tags::from(sample_tags());
+        bh.iter(|| {
+            for i in 0..tags.len() {
+                black_box(tags.get(i));
+            }
         });
     }
 }
