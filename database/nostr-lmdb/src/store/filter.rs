@@ -46,20 +46,37 @@ impl DatabaseFilter {
             return false;
         }
 
-        // TODO: review this code
+        let mut missing: usize = self.generic_tags.len();
+        let mut done: u64 = 0;
 
-        // Match
-        self.generic_tags.iter().all(|(tag_name, set)| {
-            event.tags.iter().any(|tag| {
-                if let Some((first, content)) = tag.extract() {
-                    if tag_name == &first {
-                        return set.contains(content);
-                    }
+        for t in event.tags.iter() {
+            let Some((letter, val)) = t.extract() else {
+                continue;
+            };
+
+            let bit: u32 = letter_bit(letter);
+
+            // If already done, immediately skip, avoiding the BTreeSet lookup
+            if done & (1u64 << bit) != 0 {
+                continue;
+            }
+
+            let Some(set) = self.generic_tags.get(&letter) else {
+                continue;
+            };
+
+            if set.contains(val) {
+                done |= 1u64 << bit;
+
+                missing -= 1;
+
+                if missing == 0 {
+                    return true;
                 }
+            }
+        }
 
-                false
-            })
-        })
+        missing == 0
     }
 
     #[inline]
@@ -105,6 +122,18 @@ impl DatabaseFilter {
             && self.until.is_none_or(|t| event.created_at <= t)
             && self.tag_match(event)
             && self.search_match(event)
+    }
+}
+
+/// 'a'..'z' -> 0..25, 'A'..'Z' -> 26..51
+#[inline]
+fn letter_bit(letter: SingleLetterTag) -> u32 {
+    let c: char = letter.as_char();
+    let base: u32 = (c.to_ascii_lowercase() as u32) - ('a' as u32);
+    if c.is_ascii_lowercase() {
+        base
+    } else {
+        base + 26
     }
 }
 

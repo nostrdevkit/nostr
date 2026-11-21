@@ -540,7 +540,7 @@ impl Filter {
         };
 
         // Derive the value from the serialized form (the element after the tag name)
-        match tag.into_iter().nth(1) {
+        match tag.content() {
             Some(value) => self.custom_tag(single_letter_tag, value),
             // No value to index: leave the filter unchanged
             None => self,
@@ -625,27 +625,37 @@ impl Filter {
             return false;
         }
 
-        // Make indexes
-        let mut indexes: BTreeMap<SingleLetterTag, BTreeSet<String>> = BTreeMap::new();
-        for (single_letter_tag, content) in event
-            .tags
-            .iter()
-            .filter_map(|t| Some((t.single_letter_tag()?, t.content()?)))
-        {
-            indexes
-                .entry(single_letter_tag)
-                .or_default()
-                .insert(content.to_string());
+        let mut missing: usize = self.generic_tags.len();
+        let mut done: u64 = 0;
+
+        for t in event.tags.iter() {
+            let (Some(letter), Some(val)) = (t.single_letter_tag(), t.content()) else {
+                continue;
+            };
+
+            let bit: u32 = letter_bit(letter);
+
+            // If already done, immediately skip, avoiding the BTreeSet lookup
+            if done & (1u64 << bit) != 0 {
+                continue;
+            }
+
+            let Some(set) = self.generic_tags.get(&letter) else {
+                continue;
+            };
+
+            if set.contains(val) {
+                done |= 1u64 << bit;
+
+                missing -= 1;
+
+                if missing == 0 {
+                    return true;
+                }
+            }
         }
 
-        // Match
-        self.generic_tags.iter().all(|(tag_name, set)| {
-            if let Some(val_set) = indexes.get(tag_name) {
-                set.iter().any(|t| val_set.contains(t))
-            } else {
-                false
-            }
-        })
+        missing == 0
     }
 
     #[inline]
@@ -679,6 +689,18 @@ impl Filter {
             && (!opts.until || self.until.is_none_or(|t| event.created_at <= t))
             && (!opts.tags || self.tag_match(event))
             && (!opts.nip50 || self.search_match(event))
+    }
+}
+
+/// 'a'..'z' -> 0..25, 'A'..'Z' -> 26..51
+#[inline]
+fn letter_bit(letter: SingleLetterTag) -> u32 {
+    let c: char = letter.as_char();
+    let base: u32 = (c.to_ascii_lowercase() as u32) - ('a' as u32);
+    if c.is_ascii_lowercase() {
+        base
+    } else {
+        base + 26
     }
 }
 
@@ -1216,13 +1238,10 @@ mod benches {
             );
 
         // Filter
-        let pk =
-            PublicKey::from_hex("b2d670de53b27691c0c3400225b65c35a26d06093bcc41f48ffc71e0907f9d4a")
+        let id =
+            EventId::from_hex("7469af3be8c8e06e1b50ef1caceba30392ddc0b6614507398b7d7daa4c218e96")
                 .unwrap();
-        let filter = Filter::new()
-            .pubkey(pk)
-            .search("linux")
-            .kind(Kind::TextNote);
+        let filter = Filter::new().event(id).search("linux").kind(Kind::TextNote);
 
         bh.iter(|| {
             black_box(filter.match_event(&event, MatchEventOptions::new()));
