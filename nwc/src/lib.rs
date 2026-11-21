@@ -379,7 +379,7 @@ impl NostrWalletConnect {
                 }
 
                 if event.kind != Kind::WalletConnectNotification
-                    || event.kind != Kind::WalletConnectNotificationNip44V2
+                    && event.kind != Kind::WalletConnectNotificationNip44V2
                 {
                     tracing::trace!("Ignoring event with kind: {}", event.kind);
                     return None;
@@ -769,5 +769,93 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(RESPONSE, wallet_response);
+    }
+
+    /// Wait for the next client notification matching `predicate`.
+    async fn next_matching<F>(
+        notifications: &mut NotificationStream<ClientNotification>,
+        predicate: F,
+    ) where
+        F: Fn(&ClientNotification) -> bool,
+    {
+        loop {
+            let notification = notifications.next().await.expect("client shut down");
+            if predicate(&notification) {
+                return;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_notifications_yields_both_notification_kinds() {
+        const NOTIFICATION_JSON: &str = r#"{
+            "notification_type": "payment_received",
+            "notification": {
+                "type": "incoming",
+                "invoice": "lnbc1",
+                "preimage": "00",
+                "payment_hash": "11",
+                "amount": 1000,
+                "fees_paid": 0,
+                "created_at": 1700000000,
+                "settled_at": 1700000001
+            }
+        }"#;
+
+        let relay = MockRelay::run().await.unwrap();
+        let relay_url = relay.url().await;
+        let (wkeys, ckeys, uri) = create_keys(relay_url.clone());
+        let nwc = NostrWalletConnect::new(uri);
+
+        // Unfiltered client notifications, used to synchronize with the relay.
+        let mut client_notifications = nwc.client().notifications();
+
+        // Notification kinds are ephemeral, so the relay only forwards them to
+        // already-registered subscriptions: wait for EOSE before publishing.
+        nwc.subscribe_to_notifications().await.unwrap();
+        next_matching(&mut client_notifications, |n| {
+            matches!(n, ClientNotification::Message { message, .. }
+                if matches!(**message, RelayMessage::EndOfStoredEvents { .. }))
+        })
+        .await;
+
+        let notifications = nwc.notifications();
+
+        let expected = Notification::from_json(NOTIFICATION_JSON).unwrap();
+        let wallet = Client::new();
+        wallet.add_relay(relay_url).and_connect().await.unwrap();
+        let ciphers = [
+            (Kind::WalletConnectNotification, Nip47Ciphers::NIP04),
+            (
+                Kind::WalletConnectNotificationNip44V2,
+                Nip47Ciphers::NIP44V2,
+            ),
+        ];
+        for (kind, cipher) in ciphers {
+            let content = cipher
+                .encrypt(wkeys.secret_key(), &ckeys.public_key(), &expected.as_json())
+                .unwrap();
+            let event = EventBuilder::new(kind)
+                .content(content)
+                .tag(Tag::public_key(ckeys.public_key()))
+                .finalize(&wkeys)
+                .unwrap();
+            wallet.send_event(&event).await.unwrap();
+        }
+
+        // Once the client has received both events, shut it down to terminate
+        // the stream under test. Broadcast receivers observe notifications in
+        // the same order, so the stream sees both events before the shutdown.
+        for _ in ciphers {
+            next_matching(&mut client_notifications, |n| {
+                matches!(n, ClientNotification::Event { .. })
+            })
+            .await;
+        }
+        nwc.shutdown().await;
+
+        let notifications: Vec<Notification> =
+            notifications.map(|res| res.unwrap()).collect().await;
+        assert_eq!(notifications, [expected.clone(), expected]);
     }
 }
