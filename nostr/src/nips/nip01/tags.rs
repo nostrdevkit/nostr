@@ -404,6 +404,31 @@ mod benches {
     use super::*;
 
     #[bench]
+    pub fn nip01_a_to_tag(bh: &mut Bencher) {
+        let coordinate = Coordinate::from_kpi_format(
+            "30617:00000001505e7e48927046e9bbaa728b1f3b511227e2200c578d6e6bb0c77eb9:n34",
+        )
+        .unwrap();
+        let tag: Nip01Tag = Nip01Tag::Coordinate {
+            coordinate,
+            relay_hint: None,
+        };
+        bh.iter(|| {
+            let tag: Tag = (&tag).into();
+            black_box(tag);
+        });
+    }
+
+    #[bench]
+    pub fn nip01_d_to_tag(bh: &mut Bencher) {
+        let tag: Nip01Tag = Nip01Tag::Identifier(String::from("test"));
+        bh.iter(|| {
+            let tag: Tag = (&tag).into();
+            black_box(tag);
+        });
+    }
+
+    #[bench]
     pub fn nip01_e_to_tag(bh: &mut Bencher) {
         let id = EventId::all_zeros();
         let tag: Nip01Tag = Nip01Tag::Event {
@@ -418,8 +443,12 @@ mod benches {
     }
 
     #[bench]
-    pub fn nip01_d_to_tag(bh: &mut Bencher) {
-        let tag: Nip01Tag = Nip01Tag::Identifier(String::from("test"));
+    pub fn nip01_p_to_tag(bh: &mut Bencher) {
+        let public_key = PublicKey::from_byte_array([0; 32]);
+        let tag: Nip01Tag = Nip01Tag::PublicKey {
+            public_key,
+            relay_hint: None,
+        };
         bh.iter(|| {
             let tag: Tag = (&tag).into();
             black_box(tag);
