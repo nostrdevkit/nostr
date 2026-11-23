@@ -1805,11 +1805,13 @@ version = "0.45.1"
 dependencies = [
  "atomic-destructor",
  "bytes",
+ "faster-hex",
  "http-body-util",
  "hyper",
  "hyper-util",
  "nostr",
  "opaquerr",
+ "rand 0.10.1",
  "serde",
  "serde_json",
  "tokio",

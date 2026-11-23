@@ -29,6 +29,9 @@ use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use nostr::prelude::*;
+use rand::Rng;
+use rand::rand_core::UnwrapErr;
+use rand::rngs::SysRng;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Value, json};
@@ -45,6 +48,8 @@ pub use self::error::Error;
 
 const DEFAULT_HTML: &str = include_str!("../index.html");
 const JS: &str = include_str!("../proxy.js");
+/// Placeholder in `proxy.js`, replaced with the session token when the script is served
+const TOKEN_PLACEHOLDER: &str = "__NIP07_PROXY_TOKEN__";
 
 type PendingResponseMap = HashMap<Uuid, Sender<Result<Value, String>>>;
 
@@ -226,6 +231,13 @@ impl Default for BrowserSignerProxyOptions {
     }
 }
 
+fn generate_token() -> Arc<str> {
+    let mut rng = UnwrapErr(SysRng);
+    let mut bytes = [0u8; 32];
+    rng.fill_bytes(&mut bytes);
+    Arc::from(faster_hex::hex_string(&bytes))
+}
+
 impl BrowserSignerProxyOptions {
     /// Sets the timeout duration.
     pub const fn timeout(mut self, timeout: Duration) -> Self {
@@ -328,6 +340,9 @@ impl BrowserSignerProxy {
         let custom_html = self.inner.options.custom_html;
         let shutdown: Arc<Notify> = self.inner.shutdown.clone();
 
+        // Generate the per-session secret token
+        let token: Arc<str> = generate_token();
+
         tokio::spawn(async move {
             tracing::info!("Starting proxy server on {addr}");
 
@@ -345,10 +360,11 @@ impl BrowserSignerProxy {
                         let io: TokioIo<TcpStream> = TokioIo::new(stream);
                         let state: Arc<ProxyState> = state.clone();
                         let shutdown: Arc<Notify> = shutdown.clone();
+                        let token: Arc<str> = token.clone();
 
                         tokio::spawn(async move {
                             let service = service_fn(move |req| {
-                                handle_request(req, state.clone(), custom_html)
+                                handle_request(req, state.clone(), custom_html, token.clone())
                             });
 
                             tokio::select! {
@@ -423,10 +439,21 @@ impl BrowserSignerProxy {
 
     #[inline]
     async fn _sign_event(&self, event: UnsignedEvent) -> Result<Event, Error> {
+        // The extension may modify `created_at` and `tags` if the ID is unset
+        let mut unsigned: UnsignedEvent = event;
+        unsigned.ensure_id();
+
         let event: Event = self
-            .request(RequestMethod::SignEvent, serde_json::to_value(event)?)
+            .request(RequestMethod::SignEvent, serde_json::to_value(&unsigned)?)
             .await?;
+
+        // Ensure the returned event matches the requested one.
+        if event.id != unsigned.id() {
+            return Err(Error::mismatch());
+        }
+
         event.verify()?;
+
         Ok(event)
     }
 
@@ -526,7 +553,11 @@ async fn handle_request(
     req: Request<Incoming>,
     state: Arc<ProxyState>,
     custom_html: &'static str,
+    token: Arc<str>,
 ) -> Result<Response<BoxBody<Bytes, Error>>, Error> {
+    // Extract the query string from the URI
+    let query: Option<&str> = req.uri().query();
+
     match (req.method(), req.uri().path()) {
         // Serve the HTML proxy page
         (&Method::GET, "/") => {
@@ -539,12 +570,20 @@ async fn handle_request(
                 .header("Content-Type", "text/html")
                 .body(full(html))?)
         }
-        // Serve the JS proxy script
-        (&Method::GET, "/proxy.js") => Ok(Response::builder()
-            .header("Content-Type", "application/javascript")
-            .body(full(JS))?),
+        // Serve the JS proxy script, replacing the placeholder with the per-session session token
+        (&Method::GET, "/proxy.js") => {
+            let js: String = JS.replace(TOKEN_PLACEHOLDER, &token);
+            Ok(Response::builder()
+                .header("Content-Type", "application/javascript")
+                .body(full(js))?)
+        }
         // Browser polls this endpoint to get pending requests
         (&Method::GET, "/api/pending") => {
+            // Check the per-session token
+            if !check_token(query, &token) {
+                return Ok(forbidden());
+            }
+
             state
                 .last_pending_request
                 .store(current_time(), Ordering::SeqCst);
@@ -561,11 +600,15 @@ async fn handle_request(
 
             Ok(Response::builder()
                 .header("Content-Type", "application/json")
-                .header("Access-Control-Allow-Origin", "*")
                 .body(full(json))?)
         }
         // Get response
         (&Method::POST, "/api/response") => {
+            // Check the per-session token
+            if !check_token(query, &token) {
+                return Ok(forbidden());
+            }
+
             // Correctly collect the body bytes from the stream
             let body_bytes: Bytes = match req.into_body().collect().await {
                 Ok(collected) => collected.to_bytes(),
@@ -602,19 +645,7 @@ async fn handle_request(
                 None => tracing::warn!("No pending request found for {id}"),
             }
 
-            let response = Response::builder()
-                .header("Access-Control-Allow-Origin", "*")
-                .body(full("OK"))?;
-            Ok(response)
-        }
-        (&Method::OPTIONS, _) => {
-            // Handle CORS preflight requests
-            let response = Response::builder()
-                .header("Access-Control-Allow-Origin", "*")
-                .header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-                .header("Access-Control-Allow-Headers", "Content-Type")
-                .body(full(""))?;
-            Ok(response)
+            Ok(Response::builder().body(full("OK"))?)
         }
         // 404 - not found
         _ => {
@@ -624,6 +655,45 @@ async fn handle_request(
             Ok(response)
         }
     }
+}
+
+/// Check if the provided token matches the expected one (constant-time comparison)
+fn check_token(query: Option<&str>, token: &str) -> bool {
+    let Some(query) = query else {
+        return false;
+    };
+
+    let provided = query
+        .split('&')
+        .find_map(|pair| {
+            let (key, value) = pair.split_once('=')?;
+            (key == "token").then_some(value)
+        })
+        .unwrap_or_default();
+
+    // Constant-time comparison to avoid leaking the token through timing
+    if provided.len() != token.len() {
+        return false;
+    }
+
+    provided
+        .as_bytes()
+        .iter()
+        .zip(token.as_bytes())
+        .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+        == 0
+}
+
+fn forbidden() -> Response<BoxBody<Bytes, Error>> {
+    Response::builder()
+        .status(StatusCode::FORBIDDEN)
+        .body(full("Forbidden"))
+        .unwrap_or_else(|_| {
+            Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .body(full(String::from("Forbidden")))
+                .unwrap()
+        })
 }
 
 #[inline]
