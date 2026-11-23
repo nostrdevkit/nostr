@@ -27,6 +27,14 @@
 
 -->
 
+## Unreleased
+
+### Security
+
+- Add a per-session secret token to prevent web pages from other origins from reading or answering the signer requests
+- Remove the permissive `Access-Control-Allow-Origin: *` CORS policy and drop the CORS preflight handler
+- Validate that the event returned for a `sign_event` request matches the requested unsigned event
+
 ## v0.45.1 - 2026/09/11
 
 ### Fixed

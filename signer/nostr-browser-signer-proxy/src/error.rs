@@ -55,4 +55,11 @@ impl Error {
     pub(crate) fn shutdown() -> Self {
         Self::with_static_message(ErrorKind::State, "server is shutdown")
     }
+
+    pub(crate) fn mismatch() -> Self {
+        Self::with_static_message(
+            ErrorKind::Other,
+            "The received response doesn't match the request",
+        )
+    }
 }
