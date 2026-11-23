@@ -18,6 +18,7 @@ pub use crate::nips::nip01::{self, *};
 pub use crate::nips::nip02::{self, *};
 pub use crate::nips::nip04::{self, *};
 pub use crate::nips::nip05::{self, *};
+pub use crate::nips::nip05namecoin::{self, *};
 #[cfg(feature = "nip06")]
 pub use crate::nips::nip06::{self, *};
 pub use crate::nips::nip7d::{self, *};
