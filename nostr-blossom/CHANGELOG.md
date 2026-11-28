@@ -27,6 +27,12 @@
 
 -->
 
+## Unreleased
+
+### Security
+
+- Drop `Authorization` headers on blob redirects that leave the trusted origin or downgrade to plain HTTP
+
 ## v0.45.1 - 2026/09/11
 
 ### Fixed

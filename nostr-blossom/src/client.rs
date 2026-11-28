@@ -7,7 +7,7 @@ use base64::engine::general_purpose;
 use bitcoin_hashes::sha256::Hash as Sha256Hash;
 use nostr::prelude::*;
 use nostr::types::Url;
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue, RANGE};
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue, LOCATION, RANGE};
 #[cfg(not(target_arch = "wasm32"))]
 use reqwest::redirect::Policy;
 use reqwest::{Response, StatusCode};
@@ -183,28 +183,61 @@ impl BlossomClient {
             headers.insert(AUTHORIZATION, auth_header);
         }
 
-        request = request.headers(headers);
+        request = request.headers(headers.clone());
 
-        let response: Response = request.send().await?;
+        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+        let mut response: Response = request.send().await?;
+
+        // The trusted origin is the one the request was originally addressed
+        // to. Sensitive headers are only ever sent to this origin: as soon as
+        // a redirect leaves it (or downgrades to plain HTTP), they are
+        // permanently dropped for all the following hops.
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut trusted_origin: Option<Origin> = Some(self.base_url.origin());
+
+        #[cfg(not(target_arch = "wasm32"))]
+        for _ in 0..10 {
+            if !response.status().is_redirection() {
+                break;
+            }
+
+            let location = response.headers().get(LOCATION).ok_or_else(|| {
+                Error::with_static_message(
+                    ErrorKind::Invalid,
+                    "Redirect response missing 'Location' header",
+                )
+            })?;
+            let next_url = response.url().join(location.to_str()?)?;
+            if !next_url.as_str().contains(&sha256.to_string()) {
+                return Err(Error::with_static_message(
+                    ErrorKind::Invalid,
+                    "Redirect URL does not contain SHA256",
+                ));
+            }
+
+            // Drop sensitive headers if the hop leaves the trusted origin or
+            // downgrades from HTTPS to plain HTTP. The decision is sticky: a
+            // later same-origin hop must not re-attach them.
+            let is_trusted =
+                trusted_origin.as_ref() == Some(&next_url.origin()) && next_url.scheme() == "https";
+            if !is_trusted {
+                headers.remove(AUTHORIZATION);
+                trusted_origin = None;
+            }
+
+            response = self
+                .client
+                .get(next_url)
+                .headers(headers.clone())
+                .send()
+                .await?;
+        }
 
         if response.status().is_redirection() {
-            match response.headers().get("Location") {
-                Some(location) => {
-                    let location_str: &str = location.to_str()?;
-                    if !location_str.contains(&sha256.to_string()) {
-                        return Err(Error::with_static_message(
-                            ErrorKind::Invalid,
-                            "Redirect URL does not contain SHA256",
-                        ));
-                    }
-                }
-                None => {
-                    return Err(Error::with_static_message(
-                        ErrorKind::Invalid,
-                        "Redirect response missing 'Location' header",
-                    ));
-                }
-            }
+            return Err(Error::with_static_message(
+                ErrorKind::Invalid,
+                "Too many blob redirects",
+            ));
         }
 
         match response.status() {
