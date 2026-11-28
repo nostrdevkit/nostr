@@ -50,10 +50,11 @@
 - Build all endpoints at the server origin root and preserve `/list/<pubkey>` paths.
 - Validate redirect targets and downloaded blob hashes.
 
+## v0.45.2 - 2026/11/28
+
 ### Security
 
-- Drop `Authorization` and payment headers on blob redirects that leave the
-  trusted origin or downgrade to plain HTTP
+- Drop `Authorization` headers on blob redirects that leave the trusted origin or downgrade to plain HTTP
 
 ## v0.45.1 - 2026/09/11
 
