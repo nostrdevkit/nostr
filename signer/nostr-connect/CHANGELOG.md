@@ -41,6 +41,8 @@
 - Add `NostrConnectBuilder` and `NostrConnect::builder`
 - Add `NostrConnect::client`
 
+## v0.45.4 - 2026/11/28
+
 ### Security
 
 - Verify that NIP-46 response events are sent by the remote signer

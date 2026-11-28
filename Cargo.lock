@@ -1794,7 +1794,7 @@ dependencies = [
 
 [[package]]
 name = "nostr-connect"
-version = "0.45.3"
+version = "0.45.4"
 dependencies = [
  "async-utility",
  "nostr",
