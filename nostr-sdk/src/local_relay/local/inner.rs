@@ -1489,10 +1489,12 @@ impl InnerLocalRelay {
 
         // A missing kind constraint is a wildcard and can therefore select gift wraps.
         let gift_wrap_filters = filters.into_iter().filter(|filter| {
-            filter
-                .kinds
-                .as_ref()
-                .is_none_or(|kinds| kinds.contains(&Kind::GiftWrap))
+            match &filter.kinds {
+                // The kinds are specified, but we must ensure that aren't empty, otherwise all events, including any possible gift wraps, will be returned.
+                Some(kinds) => kinds.is_empty() || kinds.contains(&Kind::GiftWrap),
+                // No kinds specified, so we must require authentication, otherwise all events, including any possible gift wraps, will be returned.
+                None => true,
+            }
         });
         let Some(public_key) = session.nip42.public_key else {
             return if gift_wrap_filters.count() > 0 {
