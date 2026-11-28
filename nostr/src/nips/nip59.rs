@@ -399,12 +399,27 @@ where
     C: Verification,
 {
     let seal: Event = Event::from_json(seal)?;
+
+    if seal.kind != Kind::Seal {
+        return Err(Error::with_static_message(ErrorKind::Invalid, "not a seal"));
+    }
+
+    if !seal.tags.is_empty() {
+        return Err(Error::with_static_message(
+            ErrorKind::Invalid,
+            "seal tags aren't empty",
+        ));
+    }
+
     seal.verify_with_ctx(secp)?;
+
     Ok(seal)
 }
 
 fn parse_unwrapped_gift(seal: Event, rumor: String) -> Result<UnwrappedGift, Error> {
     let rumor: UnsignedEvent = UnsignedEvent::from_json(rumor)?;
+
+    rumor.verify_id()?;
 
     // Ensure the rumor author matches the seal
     if rumor.pubkey != seal.pubkey {
