@@ -8,7 +8,7 @@ use alloc::string::String;
 use core::cmp::Ordering;
 use core::fmt;
 use core::hash::{Hash, Hasher};
-use core::net::IpAddr;
+use core::net::Ipv4Addr;
 use core::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -173,25 +173,38 @@ impl RelayUrl {
 
     /// Check if the host is a local network address.
     ///
+    /// Domains:
+    /// - localhost
+    /// - *.localhost
+    ///
     /// IPv4 address ranges:
-    /// * `127.0.0.0/8`
-    /// * `10.0.0.0/8`
-    /// * `172.16.0.0/12`
-    /// * `192.168.0.0/16`
+    /// - `127.0.0.0/8`
+    /// - `10.0.0.0/8`
+    /// - `172.16.0.0/12`
+    /// - `192.168.0.0/16`
     ///
     /// IPv6 address ranges:
-    /// * `::1`
+    /// - `::1`
     pub fn is_local_addr(&self) -> bool {
-        if let Some(host) = self.url.host_str() {
-            if let Ok(addr) = IpAddr::from_str(host) {
-                return match addr {
-                    IpAddr::V4(ipv4) => ipv4.is_loopback() || ipv4.is_private(),
-                    IpAddr::V6(ipv6) => ipv6.is_loopback(),
-                };
+        match self.url.host() {
+            Some(Host::Domain(host)) => {
+                // localhost and *.localhost (RFC 6761) resolve to the local host
+                host == "localhost" || host.ends_with(".localhost")
             }
+            Some(Host::Ipv4(ipv4)) => is_local_ipv4(ipv4),
+            Some(Host::Ipv6(ipv6)) => {
+                // ::ffff:x.y.z.w is an IPv4 address in disguise
+                if let Some(mapped) = ipv6.to_ipv4_mapped() {
+                    is_local_ipv4(mapped)
+                } else {
+                    ipv6.is_loopback()           // ::1
+                        || ipv6.is_unspecified() // ::
+                        || (ipv6.segments()[0] & 0xfe00) == 0xfc00  // fc00::/7 ULA
+                        || (ipv6.segments()[0] & 0xffc0) == 0xfe80 // fe80::/10 link-local
+                }
+            }
+            None => false,
         }
-
-        false
     }
 
     /// Check if the URL is a hidden onion service address
@@ -294,6 +307,27 @@ impl<'a> From<&'a RelayUrl> for &'a Url {
     fn from(relay_url: &'a RelayUrl) -> Self {
         &relay_url.url
     }
+}
+
+/// Check if the given IPv4 address is a local/non-global address.
+///
+/// Covered ranges:
+/// * `127.0.0.0/8`     (loopback)
+/// * `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` (private)
+/// * `169.254.0.0/16`  (link-local / cloud metadata)
+/// * `0.0.0.0`         (unspecified)
+/// * `255.255.255.255` (broadcast)
+/// * `100.64.0.0/10`   (CGNAT / shared address space)
+fn is_local_ipv4(ipv4: Ipv4Addr) -> bool {
+    let [o1, o2, ..] = ipv4.octets();
+
+    ipv4.is_loopback()
+        || ipv4.is_private()
+        || ipv4.is_link_local()
+        || ipv4.is_unspecified()
+        || ipv4.is_broadcast()
+        // 100.64.0.0/10
+        || (o1 == 100 && o2 & 0b1100_0000 == 0b0100_0000)
 }
 
 #[cfg(test)]
@@ -435,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn test_is_local() {
+    fn test_is_local_addr() {
         // Local
         let url = RelayUrl::parse("ws://127.0.0.1:7777").unwrap();
         assert!(url.is_local_addr());
@@ -444,6 +478,8 @@ mod tests {
         let url = RelayUrl::parse("ws://172.16.10.11:7777").unwrap();
         assert!(url.is_local_addr());
         let url = RelayUrl::parse("ws://192.168.1.10:7777").unwrap();
+        assert!(url.is_local_addr());
+        let url = RelayUrl::parse("ws://[::1]:7777").unwrap();
         assert!(url.is_local_addr());
 
         // Non local
