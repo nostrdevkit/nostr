@@ -701,8 +701,11 @@ impl NostrConnectMessage {
     where
         R: Rng,
     {
+        let mut bytes: [u8; 16] = [0; 16];
+        rng.fill_bytes(&mut bytes);
+
         Self::Request {
-            id: rng.next_u32().to_string(),
+            id: faster_hex::hex_string(&bytes),
             method: req.method(),
             params: req.params(),
         }
