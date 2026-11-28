@@ -206,44 +206,58 @@ impl NostrConnect {
         time::timeout(Some(self.timeout), async {
             while let Some(notification) = notifications.next().await {
                 if let ClientNotification::Event { event, .. } = notification {
-                    if event.kind == Kind::NostrConnect {
-                        let msg: String =
-                            nip44::decrypt(secret_key, &event.pubkey, event.content.as_str())?;
-                        let msg: NostrConnectMessage = NostrConnectMessage::from_json(msg)?;
+                    if event.kind != Kind::NostrConnect {
+                        continue;
+                    }
 
-                        tracing::debug!("Received NIP46 message: '{msg}'");
+                    if event.pubkey != remote_signer_public_key {
+                        tracing::warn!("Received a response from another signer; skipping...");
+                        continue;
+                    }
 
-                        if req_id == msg.id() && msg.is_response() {
-                            let response: NostrConnectResponse = msg.to_response(req.method())?;
+                    let msg: String =
+                        nip44::decrypt(secret_key, &event.pubkey, event.content.as_str())?;
+                    let msg: NostrConnectMessage = NostrConnectMessage::from_json(msg)?;
 
-                            if response.is_auth_url() {
-                                if let (Some(auth_url), Some(handler)) =
-                                    (response.error, &self.auth_url_handler)
-                                {
-                                    match Url::parse(&auth_url) {
-                                        Ok(url) => {
-                                            if let Err(e) = handler.on_auth_url(url).await {
-                                                tracing::error!(
-                                                    "Impossible to handle `auth_url`: {e}"
-                                                );
-                                            }
-                                        }
-                                        Err(e) => {
-                                            tracing::error!("Can't parse `auth_url`: {e}")
-                                        }
+                    tracing::debug!("Received NIP46 message: '{msg}'");
+
+                    if req_id == msg.id() && msg.is_response() {
+                        let response: NostrConnectResponse = msg.to_response(req.method())?;
+
+                        if response.is_auth_url() {
+                            match (response.error, &self.auth_url_handler) {
+                                (Some(auth_url), Some(handler)) => {
+                                    let url: Url = Url::parse(&auth_url)?;
+
+                                    let scheme: &str = url.scheme();
+
+                                    if scheme != "http" && scheme != "https" {
+                                        return Err(Error::invalid_response(format!(
+                                            "Received `auth_url` with unsupported scheme: {scheme}"
+                                        )));
                                     }
-                                }
-                            } else {
-                                if let Some(error) = response.error {
-                                    return Err(Error::response(error));
-                                }
 
-                                if let Some(result) = response.result {
-                                    return Ok(result);
+                                    handler.on_auth_url(url).await?;
                                 }
-
-                                break;
+                                (Some(_), None) => {
+                                    tracing::warn!(
+                                        "Received `auth_url` but no auth URL handler is configured"
+                                    );
+                                }
+                                (None, _) => {
+                                    tracing::warn!("Received invalid `auth_url` response");
+                                }
                             }
+                        } else {
+                            if let Some(error) = response.error {
+                                return Err(Error::response(error));
+                            }
+
+                            if let Some(result) = response.result {
+                                return Ok(result);
+                            }
+
+                            break;
                         }
                     }
                 }
@@ -287,11 +301,24 @@ impl NostrConnect {
             .await
     }
 
-    /// Sign an [UnsignedEvent]
-    async fn _sign_event(&self, unsigned: UnsignedEvent) -> Result<Event, Error> {
+    async fn _sign_event(&self, mut unsigned: UnsignedEvent) -> Result<Event, Error> {
+        // Ensure the event has na ID
+        let unsigned_id: EventId = unsigned.id();
+
         let req = NostrConnectRequest::SignEvent(unsigned);
         let res = self.send_request(req).await?;
-        Ok(res.to_sign_event()?)
+
+        let event: Event = res.to_sign_event()?;
+
+        if event.id != unsigned_id {
+            return Err(Error::invalid_response(
+                "Received an event that mismatch the sent one",
+            ));
+        }
+
+        event.verify()?;
+
+        Ok(event)
     }
 
     async fn _nip04_encrypt(
