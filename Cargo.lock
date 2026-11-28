@@ -1904,7 +1904,7 @@ dependencies = [
 
 [[package]]
 name = "nostr-sdk"
-version = "0.45.6"
+version = "0.45.7"
 dependencies = [
  "async-utility",
  "async-wsocket",

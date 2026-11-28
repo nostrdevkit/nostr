@@ -70,6 +70,8 @@
 - Deprecate `LocalRelayBuilder::max_query_results` and `LocalRelayBuilder::default_filter_limit` (https://github.com/nostrdevkit/nostr/pull/1461)
 - Deprecate `Relay::fetch_events` and `Client::fetch_events`
 
+## v0.45.7 - 2026/11/28
+
 ### Security
 
 - Fix NIP-42 auth bypass in `LocalRelay`
