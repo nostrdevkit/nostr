@@ -51,6 +51,7 @@
 ### Security
 
 - Enforce max length for relay URLs in `RelayUrl::parse` (https://github.com/nostrdevkit/nostr/pull/1451)
+- Validate NIP-05 address name and domain in `Nip05Address::parse`
 
 ## v0.45.7 - 2026/11/05
 
