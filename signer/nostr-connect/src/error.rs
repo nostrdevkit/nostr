@@ -36,6 +36,7 @@ opaquerr::define_error! {
     from {
         nostr::error::Error => ErrorKind::Protocol,
         nostr_sdk::error::Error => ErrorKind::Sdk,
+        nostr::types::url::ParseError => ErrorKind::Invalid,
         SetError<PublicKey> => ErrorKind::State,
     }
 }

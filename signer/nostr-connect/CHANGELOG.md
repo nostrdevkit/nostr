@@ -27,6 +27,14 @@
 
 -->
 
+## Unreleased
+
+### Security
+
+- Verify that NIP-46 response events are sent by the remote signer
+- Verify signature and event ID of NIP-46 `sign_event` responses
+- Validate `auth_url` scheme and fail fast on unusable `auth_url` responses
+
 ## v0.45.3 - 2026/11/16
 
 ### Security
