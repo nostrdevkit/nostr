@@ -33,6 +33,42 @@ impl fmt::Display for Nip05Address {
     }
 }
 
+/// Check if a NIP-05 local-part is valid
+///
+/// The allowed characters are the ones allowed by the NIP-05 specification:
+/// letters, digits, `-` and `_` (the `_` local-part is the root identifier).
+fn is_valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// Check if a NIP-05 domain is a valid hostname
+///
+/// Only DNS hostnames are accepted: dot-separated labels of alphanumeric
+/// characters and `-`. IP addresses, ports, paths, query strings, fragments
+/// and percent-encoded characters are rejected, ensuring that the composed
+/// URL is always `https://<domain>/.well-known/nostr.json?name=<name>`.
+fn is_valid_domain(domain: &str) -> bool {
+    if domain.is_empty()
+        || domain.starts_with('.')
+        || domain.ends_with('.')
+        || domain.contains("..")
+    {
+        return false;
+    }
+
+    domain.split('.').all(|label| {
+        !label.is_empty()
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    })
+}
+
 impl Nip05Address {
     /// Parse a NIP-05 address (i.e., `yuki@yukikishimoto.com`).
     pub fn parse(address: &str) -> Result<Self, Error> {
@@ -40,11 +76,12 @@ impl Nip05Address {
         let mut split: Split<char> = address.split('@');
 
         // Get first and second parts
-        let (name, domain): (&str, &str) = match (split.next(), split.next()) {
+        // The third is checked to make sure there aren't others "@"
+        let (name, domain): (&str, &str) = match (split.next(), split.next(), split.next()) {
             // First and second parts found
-            (Some(name), Some(domain)) => (name, domain),
+            (Some(name), Some(domain), None) => (name, domain),
             // Found only a part, meaning that `@` is missing
-            (Some(address), None) => ("_", address),
+            (Some(address), None, None) => ("_", address),
             // Invalid format
             _ => {
                 return Err(Error::with_static_message(
@@ -54,9 +91,37 @@ impl Nip05Address {
             }
         };
 
-        // Compose and parse the URLS
-        let url: String = format!("https://{domain}/.well-known/nostr.json?name={name}");
-        let url: Url = Url::parse(&url).map_err(Error::malformed)?;
+        if !is_valid_name(name) || !is_valid_domain(domain) {
+            return Err(Error::with_static_message(
+                ErrorKind::Malformed,
+                "invalid name or domain",
+            ));
+        }
+
+        // Compose and parse the URL
+        //
+        // Both `name` and `domain` are validated, so the resulting URL is
+        // always `https://<domain>/.well-known/nostr.json?name=<name>`.
+        let url: String = format!("https://{domain}");
+        let mut url: Url = Url::parse(&url).map_err(Error::malformed)?;
+
+        // The host must be a DNS domain (not an IP
+        // address) and the URL must have no port, fragment, username or
+        // password.
+        if url.domain().is_none()
+            || url.port().is_some()
+            || url.fragment().is_some()
+            || !url.username().is_empty()
+            || url.password().is_some()
+        {
+            return Err(Error::with_static_message(
+                ErrorKind::Invalid,
+                "invalid NIP-05 address",
+            ));
+        }
+
+        url.set_path(".well-known/nostr.json");
+        url.query_pairs_mut().append_pair("name", name);
 
         Ok(Self {
             name: name.to_string(),
@@ -274,5 +339,50 @@ mod tests {
             ]
         );
         assert!(profile.nip46.is_empty());
+    }
+
+    #[test]
+    fn test_nip05_address_parse() {
+        assert!(Nip05Address::parse("alice@example.com").is_ok());
+        assert!(Nip05Address::parse("yuki@sub.example.com").is_ok());
+        assert!(Nip05Address::parse("alice-1_x@example.com").is_ok());
+
+        // Invalid names
+        assert!(Nip05Address::parse("@example.com").is_err());
+        assert!(Nip05Address::parse("bad name@example.com").is_err());
+        assert!(Nip05Address::parse("bad/slash@example.com").is_err());
+        assert!(Nip05Address::parse("bad@name@example.com").is_err());
+        assert!(Nip05Address::parse("üñí@example.com").is_err());
+
+        // Invalid domains
+        assert!(Nip05Address::parse("yuki@").is_err());
+        assert!(Nip05Address::parse("yuki@example.com:8443").is_err());
+        assert!(Nip05Address::parse("yuki@127.0.0.1").is_err());
+        assert!(Nip05Address::parse("yuki@example.com/path").is_err());
+        assert!(Nip05Address::parse("yuki@example.com?name=x").is_err());
+        assert!(Nip05Address::parse("yuki@example.com#fragment").is_err());
+        assert!(Nip05Address::parse("yuki@ex%ample.com").is_err());
+        assert!(Nip05Address::parse("yuki@-example.com").is_err());
+
+        // Redirect the verifier to an attacker-controlled path on the domain
+        assert!(Nip05Address::parse("alice@trusted.example/uploads/attacker.json#").is_err());
+
+        // Point the verifier to an internal endpoint on an arbitrary port
+        assert!(Nip05Address::parse("alice@127.0.0.1:8443/internal/api?action=1#").is_err());
+
+        // Silently drop an extra `@` segment to bypass domain validation
+        assert!(Nip05Address::parse("alice@victim.example@evil.example").is_err());
+    }
+
+    #[test]
+    fn test_url_is_always_the_standard_one() {
+        // Whatever the input, the URL must always be the NIP-05 standard one
+        let address = Nip05Address::parse("alice@example.com").unwrap();
+        assert_eq!(
+            address.url().to_string(),
+            "https://example.com/.well-known/nostr.json?name=alice"
+        );
+        assert_eq!(address.domain(), "example.com");
+        assert_eq!(address.to_string(), "alice@example.com");
     }
 }
