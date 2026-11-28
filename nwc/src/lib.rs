@@ -769,7 +769,7 @@ mod tests {
 
     /// Wait for the next client notification matching `predicate`.
     async fn next_matching<F>(
-        notifications: &mut NotificationStream<ClientNotification>,
+        notifications: &mut Pin<Box<dyn Stream<Item = ClientNotification> + Send>>,
         predicate: F,
     ) where
         F: Fn(&ClientNotification) -> bool,
@@ -831,8 +831,7 @@ mod tests {
             let content = cipher
                 .encrypt(wkeys.secret_key(), &ckeys.public_key(), &expected.as_json())
                 .unwrap();
-            let event = EventBuilder::new(kind)
-                .content(content)
+            let event = EventBuilder::new(kind, content)
                 .tag(Tag::public_key(ckeys.public_key()))
                 .finalize(&wkeys)
                 .unwrap();
