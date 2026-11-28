@@ -24,6 +24,7 @@ use bytes::Bytes;
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
+use hyper::header::HeaderMap;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
@@ -364,7 +365,7 @@ impl BrowserSignerProxy {
 
                         tokio::spawn(async move {
                             let service = service_fn(move |req| {
-                                handle_request(req, state.clone(), custom_html, token.clone())
+                                handle_request(req, state.clone(), custom_html, token.clone(), addr)
                             });
 
                             tokio::select! {
@@ -554,9 +555,13 @@ async fn handle_request(
     state: Arc<ProxyState>,
     custom_html: &'static str,
     token: Arc<str>,
+    addr: SocketAddr,
 ) -> Result<Response<BoxBody<Bytes, Error>>, Error> {
-    // Extract the query string from the URI
-    let query: Option<&str> = req.uri().query();
+    // Validate the Host header and the request origin signals
+    // (blocks DNS rebinding and cross-site/XSSI requests)
+    if !is_trusted_request(&req, &addr) {
+        return Ok(forbidden());
+    }
 
     match (req.method(), req.uri().path()) {
         // Serve the HTML proxy page
@@ -568,6 +573,7 @@ async fn handle_request(
             };
             Ok(Response::builder()
                 .header("Content-Type", "text/html")
+                .header("X-Content-Type-Options", "nosniff")
                 .body(full(html))?)
         }
         // Serve the JS proxy script, replacing the placeholder with the per-session session token
@@ -575,12 +581,16 @@ async fn handle_request(
             let js: String = JS.replace(TOKEN_PLACEHOLDER, &token);
             Ok(Response::builder()
                 .header("Content-Type", "application/javascript")
+                // Prevent cross-origin pages from loading this script as a
+                // `<script>` tag and reading the token (XSSI)
+                .header("Cross-Origin-Resource-Policy", "same-origin")
+                .header("X-Content-Type-Options", "nosniff")
                 .body(full(js))?)
         }
         // Browser polls this endpoint to get pending requests
         (&Method::GET, "/api/pending") => {
             // Check the per-session token
-            if !check_token(query, &token) {
+            if !check_token(req.headers(), &token) {
                 return Ok(forbidden());
             }
 
@@ -600,12 +610,13 @@ async fn handle_request(
 
             Ok(Response::builder()
                 .header("Content-Type", "application/json")
+                .header("X-Content-Type-Options", "nosniff")
                 .body(full(json))?)
         }
         // Get response
         (&Method::POST, "/api/response") => {
             // Check the per-session token
-            if !check_token(query, &token) {
+            if !check_token(req.headers(), &token) {
                 return Ok(forbidden());
             }
 
@@ -658,18 +669,13 @@ async fn handle_request(
 }
 
 /// Check if the provided token matches the expected one (constant-time comparison)
-fn check_token(query: Option<&str>, token: &str) -> bool {
-    let Some(query) = query else {
+fn check_token(headers: &HeaderMap, token: &str) -> bool {
+    let Some(provided) = headers
+        .get("x-proxy-token")
+        .and_then(|value| value.to_str().ok())
+    else {
         return false;
     };
-
-    let provided = query
-        .split('&')
-        .find_map(|pair| {
-            let (key, value) = pair.split_once('=')?;
-            (key == "token").then_some(value)
-        })
-        .unwrap_or_default();
 
     // Constant-time comparison to avoid leaking the token through timing
     if provided.len() != token.len() {
@@ -682,6 +688,41 @@ fn check_token(query: Option<&str>, token: &str) -> bool {
         .zip(token.as_bytes())
         .fold(0u8, |acc, (a, b)| acc | (a ^ b))
         == 0
+}
+
+/// Check that the request comes from a trusted context:
+/// the `Host` header must match the address the proxy is bound to
+/// (blocks DNS rebinding) and the browser origin signals, when present,
+/// must indicate a same-origin request (blocks XSSI and cross-site reads).
+fn is_trusted_request(req: &Request<Incoming>, addr: &SocketAddr) -> bool {
+    // The Host header must be exactly the bound address
+    let expected_host: String = addr.to_string();
+
+    let Some(host) = req.headers().get("host").and_then(|h| h.to_str().ok()) else {
+        return false;
+    };
+
+    if !host.eq_ignore_ascii_case(&expected_host) {
+        return false;
+    }
+
+    // Browsers send `Sec-Fetch-Site` on almost all fetches: only same-origin
+    // (or requests without the header, i.e. not from a browser) are allowed.
+    let site_ok: bool = req
+        .headers()
+        .get("sec-fetch-site")
+        .and_then(|value| value.to_str().ok())
+        .is_none_or(|site| site == "same-origin" || site == "none");
+
+    // Same check on `Origin`: absent (not a CORS context), "null"
+    // (local HTML files served from `file://`) or the proxy origin itself.
+    let origin_ok: bool = req
+        .headers()
+        .get("origin")
+        .and_then(|value| value.to_str().ok())
+        .is_none_or(|origin| origin == "null" || origin == format!("http://{}", expected_host));
+
+    site_ok && origin_ok
 }
 
 fn forbidden() -> Response<BoxBody<Bytes, Error>> {

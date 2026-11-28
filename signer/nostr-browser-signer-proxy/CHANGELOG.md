@@ -27,6 +27,14 @@
 
 -->
 
+## Unreleased
+
+### Security
+
+- Validate request origin (Host, Origin, Sec-Fetch-Site) to block DNS rebinding and XSSI
+- Protect `/proxy.js` from cross-origin reads and hide the session token (IIFE)
+- Move the session token to the `X-Proxy-Token` header
+
 ## v0.45.2 - 2026/11/23
 
 ### Security

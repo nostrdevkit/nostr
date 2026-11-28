@@ -1,32 +1,48 @@
-let isPolling = false;
+(async () => {
+    let isPolling = false;
 
-// Per-session token, replaced by the server when the script is served
-const PROXY_TOKEN = "__NIP07_PROXY_TOKEN__";
+    // Per-session token, replaced by the server when the script is served.
+    // Wrapped in an IIFE so that the token is not readable by other <script>
+    // loads (XSSI), as the top-level `const` would be a global binding.
+    const PROXY_TOKEN = "__NIP07_PROXY_TOKEN__";
 
-async function pollForRequests() {
-    if (isPolling) return;
-    isPolling = true;
+    async function pollForRequests() {
+        if (isPolling) return;
+        isPolling = true;
 
-    try {
-        const response = await fetch(`/api/pending?token=${PROXY_TOKEN}`);
-        const data = await response.json();
+        try {
+            const response = await fetch(`/api/pending`, {
+                headers: { "X-Proxy-Token": PROXY_TOKEN },
+            });
+            const data = await response.json();
 
-        console.log('Polled for requests, got:', data);
+            console.log('Polled for requests, got:', data);
 
-        // Process any new requests
-        if (data.requests && data.requests.length > 0) {
-            console.log(`Processing ${data.requests.length} requests`);
-            for (const request of data.requests) {
-                await handleNip07Request(request);
+            // Process any new requests
+            if (data.requests && data.requests.length > 0) {
+                console.log(`Processing ${data.requests.length} requests`);
+                for (const request of data.requests) {
+                    await handleNip07Request(request);
+                }
             }
+        } catch (error) {
+            console.error('Polling error:', error);
+            updateStatus('Error: ' + error.message, 'error');
         }
-    } catch (error) {
-        console.error('Polling error:', error);
-        updateStatus('Error: ' + error.message, 'error');
+
+        isPolling = false;
     }
 
-    isPolling = false;
-}
+    async function postResponse(responsePayload) {
+        await fetch(`/api/response`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                "X-Proxy-Token": PROXY_TOKEN,
+            },
+            body: JSON.stringify(responsePayload)
+        });
+    }
 
 async function handleNip07Request(request) {
     console.log('Handling request:', request);
@@ -97,13 +113,7 @@ async function handleNip07Request(request) {
 
         console.log('Sending response:', responsePayload);
 
-        await fetch(`/api/response?token=${PROXY_TOKEN}`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(responsePayload)
-        });
+        await postResponse(responsePayload);
 
         console.log('Response sent successfully');
         updateStatus('Request processed successfully', 'connected');
@@ -120,13 +130,7 @@ async function handleNip07Request(request) {
 
         console.log('Sending error response:', errorPayload);
 
-        await fetch(`/api/response?token=${PROXY_TOKEN}`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(errorPayload)
-        });
+        await postResponse(errorPayload);
 
         updateStatus('Error: ' + error.message, 'error');
     }
@@ -158,3 +162,4 @@ window.addEventListener('load', () => {
     // Start polling every 500 ms
     setInterval(pollForRequests, 500);
 });
+})();
