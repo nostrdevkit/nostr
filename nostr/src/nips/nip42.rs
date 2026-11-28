@@ -6,10 +6,9 @@
 //!
 //! <https://github.com/nostr-protocol/nips/blob/master/42.md>
 
-use alloc::string::{String, ToString};
-use alloc::vec;
+use alloc::string::String;
 
-use crate::event::{Event, EventBuilder, IntoEventBuilder, Kind, Tag, impl_tag_codec_conversions};
+use crate::event::{Event, EventBuilder, IntoEventBuilder, Kind, impl_tag_codec_conversions};
 use crate::nips::util::{missing_tag_kind, take_relay_url, take_string, unknown_tag};
 use crate::types::RelayUrl;
 
@@ -72,12 +71,16 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
+    fn write(self, tx) {
         match self {
             Self::Challenge(challenge) => {
-                Tag::new(vec![String::from(CHALLENGE), challenge.clone()])
+                tx.push_str(CHALLENGE);
+                tx.push_str(&challenge);
             }
-            Self::Relay(relay) => Tag::new(vec![String::from(RELAY), relay.to_string()]),
+            Self::Relay(relay) => {
+                tx.push_str(RELAY);
+                tx.push_str(relay.as_str());
+            }
         }
     }
 }
@@ -123,7 +126,7 @@ pub fn is_valid_auth_event(event: &Event, relay_url: &RelayUrl, challenge: &str)
 #[cfg(all(test, feature = "std", feature = "os-rng"))]
 mod tests {
     use super::*;
-    use crate::event::{EventBuilder, FinalizeEvent};
+    use crate::event::{EventBuilder, FinalizeEvent, Tags};
     use crate::key::Keys;
 
     #[test]
@@ -132,7 +135,6 @@ mod tests {
         let parsed = Nip42Tag::parse(&tag).unwrap();
 
         assert_eq!(parsed, Nip42Tag::Challenge(String::from("1234567890")));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
     }
 
     #[test]
@@ -142,9 +144,14 @@ mod tests {
         let parsed = Nip42Tag::parse(&tag).unwrap();
 
         assert_eq!(parsed, Nip42Tag::Relay(relay.clone()));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
         assert_eq!(
-            Nip42Tag::try_from(Tag::parse(["relay", "wss://relay.damus.io"]).unwrap()).unwrap(),
+            Nip42Tag::try_from(
+                Tags::parse([["relay", "wss://relay.damus.io"]])
+                    .unwrap()
+                    .first()
+                    .unwrap()
+            )
+            .unwrap(),
             Nip42Tag::Relay(relay)
         );
     }

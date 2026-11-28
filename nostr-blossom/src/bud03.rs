@@ -10,9 +10,8 @@ pub fn server_urls(event: &Event) -> Vec<Url> {
         .tags
         .iter()
         .filter_map(|tag| {
-            let values = tag.as_slice();
-            (values.first().map(String::as_str) == Some("server"))
-                .then(|| values.get(1))
+            (tag.kind() == "server")
+                .then(|| tag.content())
                 .flatten()
                 .and_then(|url| Url::parse(url).ok())
         })

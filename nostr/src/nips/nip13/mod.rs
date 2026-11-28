@@ -8,8 +8,7 @@
 //! <https://github.com/nostr-protocol/nips/blob/master/13.md>
 
 use alloc::boxed::Box;
-use alloc::string::{String, ToString};
-use alloc::vec;
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::any::Any;
 use core::fmt::Debug;
@@ -28,7 +27,7 @@ pub use self::multi_thread::*;
 pub use self::single_thread::*;
 use super::util::{missing_tag_kind, take_and_parse_from_str, unknown_tag};
 use crate::error::Error;
-use crate::event::{Tag, UnsignedEvent, impl_tag_codec_conversions};
+use crate::event::{UnsignedEvent, impl_tag_codec_conversions};
 
 const NONCE: &str = "nonce";
 
@@ -62,14 +61,12 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
-        match self {
-            Self::Nonce { nonce, difficulty } => Tag::new(vec![
-                String::from(NONCE),
-                nonce.to_string(),
-                difficulty.to_string(),
-            ]),
-        }
+    fn write(self, tx) {
+        let Self::Nonce { nonce, difficulty } = self;
+        tx.reserve(3);
+        tx.push_str(NONCE);
+        tx.push_u128(nonce);
+        tx.push_u8(difficulty);
     }
 }
 
@@ -184,7 +181,7 @@ pub mod tests {
                 difficulty: 20
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -580,9 +577,12 @@ pub mod tests {
                 mut unsigned_event: UnsignedEvent,
                 target_difficulty: NonZeroU8,
             ) -> Result<UnsignedEvent, Self::Error> {
-                unsigned_event
-                    .tags
-                    .push(Tag::pow(3490, target_difficulty.get()));
+                let mut tags: TagsMut = unsigned_event.tags.into_mut();
+                tags.push(Nip13Tag::Nonce {
+                    nonce: 3490,
+                    difficulty: target_difficulty.get(),
+                });
+                unsigned_event.tags = tags.freeze();
                 unsigned_event.ensure_id();
                 Ok(unsigned_event)
             }
@@ -600,8 +600,8 @@ pub mod tests {
             panic!("nonce tag should be exist")
         };
 
-        assert_eq!(nonce_tag.as_slice()[1], "3490");
-        assert_eq!(nonce_tag.as_slice()[2], "2");
+        assert_eq!(nonce_tag.get(1), Some("3490"));
+        assert_eq!(nonce_tag.get(2), Some("2"));
     }
 
     #[tokio::test]
@@ -623,9 +623,12 @@ pub mod tests {
                     // Simulate an async work
                     tokio::time::sleep(Duration::from_secs(2)).await;
 
-                    unsigned_event
-                        .tags
-                        .push(Tag::pow(3490, target_difficulty.get()));
+                    let mut tags: TagsMut = unsigned_event.tags.into_mut();
+                    tags.push(Nip13Tag::Nonce {
+                        nonce: 3490,
+                        difficulty: target_difficulty.get(),
+                    });
+                    unsigned_event.tags = tags.freeze();
                     unsigned_event.ensure_id();
                     Ok(unsigned_event)
                 })
@@ -645,7 +648,7 @@ pub mod tests {
             panic!("nonce tag should be exist")
         };
 
-        assert_eq!(nonce_tag.as_slice()[1], "3490");
-        assert_eq!(nonce_tag.as_slice()[2], "2");
+        assert_eq!(nonce_tag.get(1), Some("3490"));
+        assert_eq!(nonce_tag.get(2), Some("2"));
     }
 }

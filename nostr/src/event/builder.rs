@@ -11,7 +11,7 @@ use core::pin::Pin;
 
 use super::{
     AsyncSignEvent, Event, FinalizeEvent, FinalizeEventAsync, FinalizeUnsignedEvent, Kind,
-    SignEvent, Tag, Tags, UnsignedEvent,
+    SignEvent, TagsMut, UnsignedEvent, WriteTag,
 };
 use crate::error::Error;
 use crate::key::{AsyncGetPublicKey, GetPublicKey, PublicKey};
@@ -77,7 +77,7 @@ pub struct EventBuilder {
     /// Event kind.
     pub kind: Kind,
     /// Event tags.
-    pub tags: Tags,
+    pub tags: TagsMut,
     /// Event content.
     pub content: String,
     /// Custom timestamp.
@@ -90,7 +90,7 @@ impl EventBuilder {
     pub fn new(kind: Kind) -> Self {
         Self {
             kind,
-            tags: Tags::new(),
+            tags: TagsMut::new(),
             content: String::new(),
             created_at: None,
         }
@@ -100,19 +100,19 @@ impl EventBuilder {
     #[inline]
     pub fn tag<T>(mut self, tag: T) -> Self
     where
-        T: Into<Tag>,
+        T: WriteTag,
     {
-        self.tags.push(tag.into());
+        self.tags.push(tag);
         self
     }
 
     /// Add tag if `Some`.
     pub fn tag_maybe<T>(mut self, tag: Option<T>) -> Self
     where
-        T: Into<Tag>,
+        T: WriteTag,
     {
         if let Some(tag) = tag {
-            self.tags.push(tag.into());
+            self.tags.push(tag);
         }
         self
     }
@@ -124,9 +124,9 @@ impl EventBuilder {
     pub fn tags<I, T>(mut self, tags: I) -> Self
     where
         I: IntoIterator<Item = T>,
-        T: Into<Tag>,
+        T: WriteTag,
     {
-        self.tags.extend(tags.into_iter().map(Into::into));
+        self.tags.extend(tags);
         self
     }
 
@@ -157,7 +157,7 @@ impl FinalizeUnsignedEvent for EventBuilder {
             pubkey: public_key,
             created_at: self.created_at.unwrap_or_else(Timestamp::now),
             kind: self.kind,
-            tags: self.tags,
+            tags: self.tags.freeze(),
             content: self.content,
         }
     }

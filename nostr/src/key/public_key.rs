@@ -21,7 +21,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use super::secret_key::SecretKey;
 use crate::error::{Error, ErrorKind};
-use crate::event::Tag;
+use crate::event::{TagWriter, WriteTag};
+use crate::nips::nip01::Nip01Tag;
 use crate::nips::nip19::{FromBech32, PREFIX_BECH32_PROFILE, PREFIX_BECH32_PUBLIC_KEY};
 use crate::nips::nip21::{FromNostrUri, SCHEME_WITH_COLON};
 use crate::util;
@@ -225,9 +226,15 @@ impl From<PublicKey> for String {
     }
 }
 
-impl From<PublicKey> for Tag {
-    fn from(pkey: PublicKey) -> Tag {
-        Tag::public_key(pkey)
+impl WriteTag for PublicKey {
+    fn write(self, tx: &mut TagWriter<'_>) {
+        Nip01Tag::public_key(self).write(tx)
+    }
+}
+
+impl From<PublicKey> for Nip01Tag {
+    fn from(pkey: PublicKey) -> Self {
+        Self::public_key(pkey)
     }
 }
 

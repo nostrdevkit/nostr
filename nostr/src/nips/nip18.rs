@@ -7,7 +7,6 @@
 //! <https://github.com/nostr-protocol/nips/blob/master/18.md>
 
 use alloc::string::{String, ToString};
-use alloc::vec::Vec;
 
 use super::nip01::Coordinate;
 use super::util::{
@@ -16,7 +15,7 @@ use super::util::{
 };
 use crate::error::Error;
 use crate::event::{
-    Event, EventBuilder, EventId, IntoEventBuilder, Kind, Tag, impl_tag_codec_conversions,
+    Event, EventBuilder, EventId, IntoEventBuilder, Kind, impl_tag_codec_conversions,
 };
 use crate::key::PublicKey;
 use crate::types::url::RelayUrl;
@@ -60,39 +59,29 @@ impl IntoEventBuilder for RepostBuilder<'_> {
         };
 
         if self.event.kind == Kind::TextNote {
-            EventBuilder::new(Kind::Repost).content(content).tags([
-                Nip18Tag::Event {
+            EventBuilder::new(Kind::Repost)
+                .content(content)
+                .tag(Nip18Tag::Event {
                     id: self.event.id,
                     relay_hint: self.relay_url,
-                }
-                .to_tag(),
-                Nip18Tag::PublicKey {
+                })
+                .tag(Nip18Tag::PublicKey {
                     public_key: self.event.pubkey,
                     relay_hint: None,
-                }
-                .to_tag(),
-            ])
+                })
         } else {
             EventBuilder::new(Kind::GenericRepost)
                 .content(content)
-                .tag_maybe(
-                    self.event
-                        .coordinate()
-                        .map(|coordinate| Tag::coordinate(coordinate, self.relay_url.clone())),
-                )
-                .tags([
-                    Nip18Tag::Event {
-                        id: self.event.id,
-                        relay_hint: self.relay_url,
-                    }
-                    .to_tag(),
-                    Nip18Tag::PublicKey {
-                        public_key: self.event.pubkey,
-                        relay_hint: None,
-                    }
-                    .to_tag(),
-                    Nip18Tag::Kind(self.event.kind).to_tag(),
-                ])
+                .tag_maybe(self.event.coordinate())
+                .tag(Nip18Tag::Event {
+                    id: self.event.id,
+                    relay_hint: self.relay_url,
+                })
+                .tag(Nip18Tag::PublicKey {
+                    public_key: self.event.pubkey,
+                    relay_hint: None,
+                })
+                .tag(Nip18Tag::Kind(self.event.kind))
         }
     }
 }
@@ -163,70 +152,59 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
+    fn write(self, tx) {
         match self {
             Self::Event { id, relay_hint } => {
-                let mut tag: Vec<String> = Vec::with_capacity(2 + relay_hint.is_some() as usize);
-                tag.push(String::from(EVENT));
-                tag.push(id.to_hex());
+                tx.push_str(EVENT);
+                tx.push_hex(id.as_bytes());
 
                 if let Some(relay_hint) = relay_hint {
-                    tag.push(relay_hint.to_string());
+                    tx.push_str(relay_hint.as_str());
                 }
-
-                Tag::new(tag)
             }
-            Self::Kind(kind) => Tag::new(vec![String::from(KIND), kind.as_u16().to_string()]),
+            Self::Kind(kind) => {
+                tx.push_str(KIND);
+                tx.push_u16(kind.as_u16());
+            }
             Self::PublicKey {
                 public_key,
                 relay_hint,
             } => {
-                let mut tag: Vec<String> = Vec::with_capacity(2 + relay_hint.is_some() as usize);
-                tag.push(String::from(PUBLIC_KEY));
-                tag.push(public_key.to_hex());
+                tx.push_str(PUBLIC_KEY);
+                tx.push_hex(public_key.as_bytes());
 
                 if let Some(relay_hint) = relay_hint {
-                    tag.push(relay_hint.to_string());
+                    tx.push_str(relay_hint.as_str());
                 }
-
-                Tag::new(tag)
             }
             Self::Quote {
                 id,
                 relay_hint,
                 public_key,
             } => {
-                let mut tag: Vec<String> = Vec::with_capacity(
-                    2 + relay_hint.is_some() as usize + public_key.is_some() as usize,
-                );
-                tag.push(String::from(QUOTE));
-                tag.push(id.to_hex());
+                tx.push_str(QUOTE);
+                tx.push_hex(id.as_bytes());
 
                 if let Some(relay_hint) = relay_hint {
-                    tag.push(relay_hint.to_string());
+                    tx.push_str(relay_hint.as_str());
                 } else if public_key.is_some() {
-                    tag.push(String::new());
+                    tx.push_str("");
                 }
 
                 if let Some(public_key) = public_key {
-                    tag.push(public_key.to_hex());
+                    tx.push_hex(public_key.as_bytes());
                 }
-
-                Tag::new(tag)
             }
             Self::QuoteAddress {
                 coordinate,
                 relay_hint,
             } => {
-                let mut tag: Vec<String> = Vec::with_capacity(2 + relay_hint.is_some() as usize);
-                tag.push(String::from(QUOTE));
-                tag.push(coordinate.to_string());
+                tx.push_str(QUOTE);
+                tx.push_str(&coordinate.to_string());
 
                 if let Some(relay_hint) = relay_hint {
-                    tag.push(relay_hint.to_string());
+                    tx.push_str(relay_hint.as_str());
                 }
-
-                Tag::new(tag)
             }
         }
     }
@@ -301,7 +279,7 @@ mod tests {
                 relay_hint: Some(relay_hint),
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -324,7 +302,7 @@ mod tests {
                 public_key: Some(keys.public_key()),
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -347,7 +325,7 @@ mod tests {
                 relay_hint: Some(relay_hint),
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -410,7 +388,7 @@ mod tests {
         assert_eq!(repost.kind, Kind::Repost);
         assert_eq!(repost.content, note.as_json());
         assert_eq!(
-            Nip18Tag::try_from(&repost.tags[0]).unwrap(),
+            Nip18Tag::try_from(repost.tags.first().unwrap()).unwrap(),
             Nip18Tag::Event {
                 id: note.id,
                 relay_hint: Some(relay_url),
@@ -423,7 +401,7 @@ mod tests {
         let keys = Keys::generate();
         let protected = EventBuilder::new(Kind::TextNote)
             .content("protected")
-            .tag(Tag::protected())
+            .tag(Nip70Tag::Protected)
             .finalize(&keys)
             .unwrap();
         let repost = RepostBuilder::new(&protected).finalize(&keys).unwrap();

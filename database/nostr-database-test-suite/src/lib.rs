@@ -57,9 +57,9 @@ macro_rules! database_unit_tests {
                 build_event(&keys_a, Metadata::new().name("account-a").display_name("Account A")),
                 build_event(&keys_b, Metadata::new().name("account-b").display_name("Account B")),
                 build_event(&keys_a, EventBuilder::new(Kind::Custom(33_333))
-                    .tag(Tag::identifier("my-id-a"))),
+                    .tag(Nip01Tag::identifier("my-id-a"))),
                 build_event(&keys_b, EventBuilder::new(Kind::Custom(33_333))
-                    .tag(Tag::identifier("my-id-b"))),
+                    .tag(Nip01Tag::identifier("my-id-b"))),
             ];
 
             // Store
@@ -115,7 +115,7 @@ macro_rules! database_unit_tests {
             .finalize(&to_vanish)
             .unwrap();
             let addresable = EventBuilder::new(Kind::LongFormTextNote).content("LONG")
-                .tag(Tag::identifier("lorem-ipsum".to_string()))
+                .tag(Nip01Tag::identifier("lorem-ipsum".to_string()))
                 .finalize(&to_vanish)
                 .unwrap();
             let dummy_gift_wrap = EventBuilder::new(Kind::GiftWrap).content(":)")
@@ -312,7 +312,7 @@ macro_rules! database_unit_tests {
 
             // Create first addressable event
             let event1 = EventBuilder::new(Kind::from(32121)).content("Content 1")
-                .tag(Tag::identifier("test-id"))
+                .tag(Nip01Tag::identifier("test-id"))
                 .custom_created_at(Timestamp::from_secs(1000))
                 .finalize(&keys)
                 .expect("Failed to finalize");
@@ -321,7 +321,7 @@ macro_rules! database_unit_tests {
 
             // Create newer addressable event with same identifier
             let event2 = EventBuilder::new(Kind::from(32121)).content("Content 2")
-                .tag(Tag::identifier("test-id"))
+                .tag(Nip01Tag::identifier("test-id"))
                 .custom_created_at(Timestamp::from_secs(2000))
                 .finalize(&keys)
                 .expect("Failed to finalize");
@@ -466,7 +466,7 @@ macro_rules! database_unit_tests {
             let expired_event = build_event(
                 &keys,
                 EventBuilder::new(Kind::TextNote).content("expired")
-                    .tag(Tag::expiration(expiration)),
+                    .tag(Nip40Tag::Expiration(expiration)),
             );
             store
                 .save_event(&expired_event)
@@ -589,7 +589,7 @@ macro_rules! database_unit_tests {
             let (keys, expected_event) = add_event(
                     &store,
                     EventBuilder::new(Kind::Custom(33_333))
-                        .tag(Tag::identifier("my-id-a"))
+                        .tag(Nip01Tag::identifier("my-id-a"))
                         .custom_created_at(now - Duration::from_secs(120)),
                 )
                 .await;
@@ -610,7 +610,7 @@ macro_rules! database_unit_tests {
             let (new_expected_event, status) = add_event_with_keys(
                     &store,
                     EventBuilder::new(Kind::Custom(33_333)).content("Test replace")
-                        .tag(Tag::identifier("my-id-a"))
+                        .tag(Nip01Tag::identifier("my-id-a"))
                         .custom_created_at(now),
                     &keys,
                 )
@@ -635,7 +635,7 @@ macro_rules! database_unit_tests {
             let (_, status) = add_event_with_keys(
                     &store,
                     EventBuilder::new(Kind::Custom(33_333)).content("Test replace 2")
-                        .tag(Tag::identifier("my-id-a"))
+                        .tag(Nip01Tag::identifier("my-id-a"))
                         .custom_created_at(now - Duration::from_secs(2000)),
                     &keys,
                 )
@@ -738,7 +738,7 @@ macro_rules! database_unit_tests {
 
             // Create and save a Kind 5 deletion event
             let deletion_event = build_event(&keys, EventBuilder::new(Kind::EventDeletion)
-                .tag(Tag::event(event.id)));
+                .tag(Nip01Tag::event(event.id)));
 
             let del_status = store
                 .save_event(&deletion_event)

@@ -23,11 +23,12 @@ mod tests {
     use async_wsocket::{ConnectionMode, Message, Url, WebSocket};
     use futures::{SinkExt, StreamExt};
     use negentropy::{Negentropy, NegentropyStorageVector};
-    use nostr::event::{Event, EventBuilder, EventId, FinalizeEvent, Kind, Tag};
+    use nostr::event::{Event, EventBuilder, EventId, FinalizeEvent, Kind};
     use nostr::filter::Filter;
     use nostr::key::{Keys, PublicKey};
     use nostr::message::{MachineReadablePrefix, RelayMessage};
     use nostr::nips::nip17::PrivateDirectMessageBuilder;
+    use nostr::nips::nip70::Nip70Tag;
     use nostr::types::RelayUrl;
     use nostr_memory::MemoryDatabase;
     use tokio::time;
@@ -91,7 +92,7 @@ mod tests {
         // Event with our target tag
         let event = EventBuilder::new(Kind::TextNote)
             .content(":)")
-            .tag(Tag::hashtag(UPDATE_TAG))
+            .tag(["t", UPDATE_TAG])
             .finalize(&keys)
             .unwrap();
         client.send_event(&event).await.unwrap();
@@ -100,7 +101,7 @@ mod tests {
         // It would only appear if the filter had not been updated correctly.
         let event = EventBuilder::new(Kind::TextNote)
             .content(":)")
-            .tag(Tag::hashtag("TEST"))
+            .tag(["t", "TEST"])
             .finalize(&keys)
             .unwrap();
         client.send_event(&event).await.unwrap();
@@ -166,7 +167,7 @@ mod tests {
             .await
             .unwrap();
         let event = PrivateDirectMessageBuilder::new(keys.public_key(), "Hey")
-            .extra_tags([Tag::public_key(PublicKey::from_slice(&[0; 32]).unwrap())])
+            .extra_tags([PublicKey::from_slice(&[0; 32]).unwrap()])
             .finalize(&keys)
             .unwrap();
         let output = client.send_event(&event).await.unwrap();
@@ -252,14 +253,14 @@ mod tests {
 
         let event = EventBuilder::new(Kind::TextNote)
             .content("IDK")
-            .tag(Tag::protected())
+            .tag(Nip70Tag::Protected)
             .finalize(&keys)
             .unwrap();
 
         let repost = EventBuilder::new(Kind::Repost)
             .content(event.as_json())
             .tag(event.id)
-            .tag(Tag::public_key(event.pubkey))
+            .tag(event.pubkey)
             .finalize(&Keys::generate())
             .unwrap();
 
@@ -394,7 +395,7 @@ mod tests {
         event.content = String::from("forged");
 
         let err = relay.add_event(event).await.unwrap_err();
-        assert_eq!(err.kind(), crate::error::ErrorKind::Protocol);
+        assert_eq!(err.kind(), ErrorKind::Protocol);
     }
 
     #[test]

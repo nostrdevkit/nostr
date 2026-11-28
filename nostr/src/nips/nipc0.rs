@@ -7,11 +7,10 @@
 //! <https://github.com/nostr-protocol/nips/blob/master/C0.md>
 
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
 
 use super::util::{missing_tag_kind, take_string, unknown_tag};
-use crate::event::{EventBuilder, IntoEventBuilder, Kind, Tag, impl_tag_codec_conversions};
+use crate::event::{EventBuilder, IntoEventBuilder, Kind, impl_tag_codec_conversions};
 
 const LANGUAGE: &str = "l";
 const NAME: &str = "name";
@@ -67,25 +66,39 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
+    fn write(self, tx) {
         match self {
             Self::Language(language) => {
-                Tag::new(vec![String::from(LANGUAGE), language.to_lowercase()])
+                tx.push_str(LANGUAGE);
+                tx.push_str(&language.to_lowercase());
             }
-            Self::Name(name) => Tag::new(vec![String::from(NAME), name.clone()]),
+            Self::Name(name) => {
+                tx.push_str(NAME);
+                tx.push_str(&name);
+            }
             Self::Extension(extension) => {
-                Tag::new(vec![String::from(EXTENSION), extension.clone()])
+                tx.push_str(EXTENSION);
+                tx.push_str(&extension);
             }
             Self::Description(description) => {
-                Tag::new(vec![String::from(DESCRIPTION), description.clone()])
+                tx.push_str(DESCRIPTION);
+                tx.push_str(&description);
             }
-            Self::Runtime(runtime) => Tag::new(vec![String::from(RUNTIME), runtime.clone()]),
-            Self::License(license) => Tag::new(vec![String::from(LICENSE), license.clone()]),
+            Self::Runtime(runtime) => {
+                tx.push_str(RUNTIME);
+                tx.push_str(&runtime);
+            }
+            Self::License(license) => {
+                tx.push_str(LICENSE);
+                tx.push_str(&license);
+            }
             Self::Dependency(dependency) => {
-                Tag::new(vec![String::from(DEPENDENCY), dependency.clone()])
+                tx.push_str(DEPENDENCY);
+                tx.push_str(&dependency);
             }
             Self::Repository(repository) => {
-                Tag::new(vec![String::from(REPOSITORY), repository.clone()])
+                tx.push_str(REPOSITORY);
+                tx.push_str(&repository);
             }
         }
     }
@@ -217,42 +230,39 @@ impl CodeSnippet {
 
 impl IntoEventBuilder for CodeSnippet {
     fn into_event_builder(self) -> EventBuilder {
-        let mut tags: Vec<Tag> = Vec::new();
+        let mut builder: EventBuilder = EventBuilder::new(Kind::CodeSnippet).content(self.snippet);
 
-        let mut add_if_some = |tag: Option<NipC0Tag>| {
-            if let Some(tag) = tag {
-                tags.push(tag.into());
-            }
-        };
+        builder.tags.reserve(7 + self.dependencies.len());
 
-        add_if_some(self.language.map(NipC0Tag::Language));
-        add_if_some(self.name.map(NipC0Tag::Name));
-        add_if_some(self.extension.map(NipC0Tag::Extension));
-        add_if_some(self.description.map(NipC0Tag::Description));
-        add_if_some(self.runtime.map(NipC0Tag::Runtime));
-        add_if_some(self.license.map(NipC0Tag::License));
-        add_if_some(self.repo.map(NipC0Tag::Repository));
+        builder.tags.extend(self.language.map(NipC0Tag::Language));
+        builder.tags.extend(self.name.map(NipC0Tag::Name));
+        builder.tags.extend(self.extension.map(NipC0Tag::Extension));
+        builder
+            .tags
+            .extend(self.description.map(NipC0Tag::Description));
+        builder.tags.extend(self.runtime.map(NipC0Tag::Runtime));
+        builder.tags.extend(self.license.map(NipC0Tag::License));
+        builder.tags.extend(self.repo.map(NipC0Tag::Repository));
 
-        for dep in self.dependencies.into_iter() {
-            tags.push(NipC0Tag::Dependency(dep).into());
+        for dep in self.dependencies {
+            builder.tags.push(NipC0Tag::Dependency(dep));
         }
 
-        EventBuilder::new(Kind::CodeSnippet)
-            .content(self.snippet)
-            .tags(tags)
+        builder
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::Tags;
 
     #[test]
     fn test_parse_language_tag() {
-        let tag = vec!["l", "Rust"];
+        let tag = vec!["l", "rust"];
         let parsed = NipC0Tag::parse(&tag).unwrap();
         assert_eq!(parsed, NipC0Tag::Language(String::from("rust")));
-        assert_eq!(parsed.to_tag(), Tag::parse(vec!["l", "rust"]).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -260,7 +270,7 @@ mod tests {
         let tag = vec!["name", "hello-world.rs"];
         let parsed = NipC0Tag::parse(&tag).unwrap();
         assert_eq!(parsed, NipC0Tag::Name(String::from("hello-world.rs")));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -268,7 +278,7 @@ mod tests {
         let tag = vec!["extension", "rs"];
         let parsed = NipC0Tag::parse(&tag).unwrap();
         assert_eq!(parsed, NipC0Tag::Extension(String::from("rs")));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -279,7 +289,7 @@ mod tests {
             parsed,
             NipC0Tag::Description(String::from("Prints Hello, Nostr!"))
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -287,7 +297,7 @@ mod tests {
         let tag = vec!["runtime", "rustc 1.70.0"];
         let parsed = NipC0Tag::parse(&tag).unwrap();
         assert_eq!(parsed, NipC0Tag::Runtime(String::from("rustc 1.70.0")));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -295,7 +305,7 @@ mod tests {
         let tag = vec!["license", "MIT"];
         let parsed = NipC0Tag::parse(&tag).unwrap();
         assert_eq!(parsed, NipC0Tag::License(String::from("MIT")));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -303,7 +313,7 @@ mod tests {
         let tag = vec!["dep", "serde"];
         let parsed = NipC0Tag::parse(&tag).unwrap();
         assert_eq!(parsed, NipC0Tag::Dependency(String::from("serde")));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -314,6 +324,6 @@ mod tests {
             parsed,
             NipC0Tag::Repository(String::from("https://github.com/nostr-protocol/nostr"))
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 }

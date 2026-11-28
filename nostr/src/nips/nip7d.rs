@@ -7,10 +7,9 @@
 //! <https://github.com/nostr-protocol/nips/blob/master/7D.md>
 
 use alloc::string::String;
-use alloc::vec;
 
 use super::util::{missing_tag_kind, take_string, unknown_tag};
-use crate::event::{Event, EventBuilder, IntoEventBuilder, Kind, Tag, impl_tag_codec_conversions};
+use crate::event::{Event, EventBuilder, IntoEventBuilder, Kind, impl_tag_codec_conversions};
 use crate::nips::nip22::Nip22Tag;
 use crate::types::RelayUrl;
 
@@ -49,7 +48,7 @@ impl IntoEventBuilder for Thread {
     fn into_event_builder(self) -> EventBuilder {
         EventBuilder::new(Kind::Thread)
             .content(self.content)
-            .tag_maybe(self.title.map(|title| Nip7DTag::Title(title).to_tag()))
+            .tag_maybe(self.title.map(Nip7DTag::Title))
     }
 }
 
@@ -85,20 +84,16 @@ impl IntoEventBuilder for ThreadReply<'_> {
     fn into_event_builder(self) -> EventBuilder {
         EventBuilder::new(Kind::Comment)
             .content(self.content)
-            .tags([
-                Nip22Tag::Event {
-                    id: self.reply_to.id,
-                    relay_hint: self.relay_hint,
-                    public_key: Some(self.reply_to.pubkey),
-                    uppercase: true,
-                }
-                .to_tag(),
-                Nip22Tag::Kind {
-                    kind: Kind::Thread,
-                    uppercase: true,
-                }
-                .to_tag(),
-            ])
+            .tag(Nip22Tag::Event {
+                id: self.reply_to.id,
+                relay_hint: self.relay_hint,
+                public_key: Some(self.reply_to.pubkey),
+                uppercase: true,
+            })
+            .tag(Nip22Tag::Kind {
+                kind: Kind::Thread,
+                uppercase: true,
+            })
     }
 }
 
@@ -124,10 +119,11 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
-        match self {
-            Self::Title(title) => Tag::new(vec![String::from(TITLE), title.clone()]),
-        }
+    fn write(self, tx) {
+        let Self::Title(title) = self;
+
+        tx.push_str(TITLE);
+        tx.push_str(&title);
     }
 }
 
@@ -136,6 +132,7 @@ mod tests {
     use super::*;
     #[cfg(all(feature = "std", feature = "os-rng"))]
     use crate::event::FinalizeEvent;
+    use crate::event::Tags;
     #[cfg(all(feature = "std", feature = "os-rng"))]
     use crate::key::Keys;
 
@@ -144,7 +141,7 @@ mod tests {
         let tag = vec!["title", "Lorem Ipsum"];
         let parsed = Nip7DTag::parse(&tag).unwrap();
         assert_eq!(parsed, Nip7DTag::Title(String::from("Lorem Ipsum")));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -156,7 +153,7 @@ mod tests {
             .unwrap();
         assert_eq!(thread.kind, Kind::Thread);
         assert_eq!(
-            Nip7DTag::try_from(&thread.tags[0]).unwrap(),
+            Nip7DTag::try_from(thread.tags.first().unwrap()).unwrap(),
             Nip7DTag::Title(String::from("title"))
         );
 

@@ -3,7 +3,8 @@
 use std::fmt;
 
 use bitcoin_hashes::sha256::Hash as Sha256Hash;
-use nostr::event::{EventBuilder, IntoEventBuilder, Kind, Tag};
+use nostr::event::{EventBuilder, IntoEventBuilder, Kind};
+use nostr::nips::nip40::Nip40Tag;
 use nostr::types::{Timestamp, Url};
 
 /// Represents the authorization data for accessing a Blossom server.
@@ -97,58 +98,50 @@ impl IntoEventBuilder for BlossomAuthorization {
     ///
     /// <https://github.com/hzrd149/blossom/blob/master/buds/01.md>
     fn into_event_builder(self) -> EventBuilder {
-        let mut tags: Vec<Tag> = Vec::new();
+        let mut builder: EventBuilder = EventBuilder::new(Kind::BlossomAuth).content(self.content);
 
         match self.scope {
             BlossomAuthorizationScope::BlobSha256Hashes(hashes) => {
                 for hash in hashes.into_iter() {
-                    let tag =
-                        Tag::parse(["x".to_string(), hash.to_string()]).expect("BUG: invalid tag");
-                    tags.push(tag);
+                    builder.tags.push(["x", hash.to_string().as_str()]);
                 }
             }
             BlossomAuthorizationScope::ServerUrl(url) => {
                 if let Some(domain) = url.host_str() {
-                    tags.push(Tag::parse(["server", domain]).expect("BUG: invalid tag"));
+                    builder.tags.push(["server", domain]);
                 }
             }
             BlossomAuthorizationScope::ServerDomains(domains) => {
                 for domain in domains {
-                    tags.push(
-                        Tag::parse(["server", domain.to_ascii_lowercase().as_str()])
-                            .expect("BUG: invalid tag"),
-                    );
+                    builder
+                        .tags
+                        .push(["server", domain.to_ascii_lowercase().as_str()]);
                 }
             }
             BlossomAuthorizationScope::ServerDomainsAndBlobSha256Hashes { domains, hashes } => {
                 for domain in domains {
-                    tags.push(
-                        Tag::parse(["server", domain.to_ascii_lowercase().as_str()])
-                            .expect("BUG: invalid tag"),
-                    );
+                    builder
+                        .tags
+                        .push(["server", domain.to_ascii_lowercase().as_str()]);
                 }
                 for hash in hashes {
-                    tags.push(
-                        Tag::parse(["x".to_string(), hash.to_string()]).expect("BUG: invalid tag"),
-                    );
+                    builder.tags.push(["x", hash.to_string().as_str()]);
                 }
             }
         }
 
-        tags.push(Tag::expiration(self.expiration));
+        builder.tags.push(Nip40Tag::Expiration(self.expiration));
 
         // Add the 't' tag to say what this auth is for
-        tags.push(Tag::hashtag(self.action.to_string()));
+        builder.tags.push(["t", self.action.to_string().as_str()]);
 
-        EventBuilder::new(Kind::BlossomAuth)
-            .content(self.content)
-            .tags(tags)
+        builder
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use nostr::event::IntoEventBuilder;
+    use nostr::event::{IntoEventBuilder, Tags};
 
     use super::*;
 
@@ -164,10 +157,16 @@ mod tests {
         );
 
         let builder = authorization.into_event_builder();
-        let tags: Vec<Vec<String>> = builder.tags.into_iter().map(|tag| tag.to_vec()).collect();
+        let tags: Tags = builder.tags.freeze();
 
-        assert!(tags.contains(&vec!["server".to_owned(), "cdn.example.com".to_owned()]));
-        assert!(tags.contains(&vec!["t".to_owned(), "media".to_owned()]));
+        assert!(
+            tags.iter()
+                .any(|t| t.kind() == "server" && t.content() == Some("cdn.example.com"))
+        );
+        assert!(
+            tags.iter()
+                .any(|t| t.kind() == "t" && t.content() == Some("media"))
+        );
         assert!(
             !tags
                 .iter()

@@ -118,7 +118,7 @@ impl SharedState {
 
 #[cfg(test)]
 mod tests {
-    use nostr::event::{EventBuilder, FinalizeEvent, Kind};
+    use nostr::event::{EventBuilder, FinalizeEvent, Kind, Tags};
     use nostr::key::Keys;
 
     use super::*;
@@ -298,7 +298,7 @@ mod tests {
         // Try to change some content, without changing the event ID
         let mut invalid_event: Event = event;
         invalid_event.content = String::from("{}");
-        invalid_event.tags.clear();
+        invalid_event.tags = Tags::new();
 
         // Event verification MUST NOT pass
         assert!(

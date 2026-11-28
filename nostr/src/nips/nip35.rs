@@ -2,19 +2,18 @@
 // Copyright (c) 2023-2025 Rust Nostr Developers
 // Distributed under the MIT software license
 
-//! NIP35: Torrents
+//! NIP-35: Torrents
 //!
 //! This module implements support for sharing BitTorrent metadata and comments through nostr events.
 //!
 //! <https://github.com/nostr-protocol/nips/blob/master/35.md>
 
 use alloc::string::{String, ToString};
-use alloc::vec;
 use alloc::vec::Vec;
 
 use bitcoin_hashes::sha1::Hash as Sha1Hash;
 
-use crate::event::{EventBuilder, IntoEventBuilder, Kind, Tag};
+use crate::event::{EventBuilder, IntoEventBuilder, Kind};
 use crate::types::url::Url;
 
 /// Represents a file within a torrent.
@@ -45,37 +44,42 @@ pub struct Torrent {
     pub hashtags: Vec<String>,
 }
 
+// TODO: add Nip35Tag enum
+
 impl IntoEventBuilder for Torrent {
     fn into_event_builder(self) -> EventBuilder {
-        let mut tags: Vec<Tag> = Vec::with_capacity(
+        let mut builder: EventBuilder = EventBuilder::new(Kind::Torrent).content(self.description);
+
+        builder.tags.reserve(
             2 + self.files.len()
                 + self.trackers.len()
                 + self.categories.len()
                 + self.hashtags.len(),
         );
 
-        tags.push(Tag::new(vec![String::from("title"), self.title]));
+        builder.tags.push(["title", self.title.as_str()]);
+        builder
+            .tags
+            .push(["x", self.info_hash.to_string().as_str()]);
 
-        tags.push(Tag::custom("x", [self.info_hash.to_string()]));
-
-        for file in self.files.into_iter() {
-            tags.push(Tag::custom("file", [file.name, file.size.to_string()]));
+        for file in self.files {
+            builder
+                .tags
+                .push(["file", file.name.as_str(), file.size.to_string().as_str()]);
         }
 
-        for tracker in self.trackers.into_iter() {
-            tags.push(Tag::custom("tracker", [tracker.to_string()]));
+        for tracker in self.trackers {
+            builder.tags.push(["tracker", tracker.to_string().as_str()]);
         }
 
-        for cat in self.categories.into_iter() {
-            tags.push(Tag::custom("i", [format!("tcat:{cat}")]));
+        for cat in self.categories {
+            builder.tags.push(["i", format!("tcat:{cat}").as_str()]);
         }
 
-        for tag in self.hashtags.into_iter() {
-            tags.push(Tag::hashtag(tag));
+        for hashtag in self.hashtags {
+            builder.tags.push(["t", hashtag.as_str()]);
         }
 
-        EventBuilder::new(Kind::Torrent)
-            .content(self.description)
-            .tags(tags)
+        builder
     }
 }

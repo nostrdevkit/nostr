@@ -8,8 +8,8 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use super::blocking_wrapper::BlockingPowFuture;
-use super::{AsyncPowAdapter, PowAdapter, single_thread};
-use crate::event::{Tag, UnsignedEvent};
+use super::{AsyncPowAdapter, Nip13Tag, PowAdapter, single_thread};
+use crate::event::{EventId, TagsMut, UnsignedEvent};
 
 /// A multithreaded Proof-of-Work miner.
 ///
@@ -73,8 +73,9 @@ fn mine(unsigned: UnsignedEvent, difficulty: u8, cancel: Arc<AtomicBool>) -> Opt
 
         let handle: JoinHandle<Option<UnsignedEvent>> = thread::spawn(move || {
             let mut nonce: u128 = thread_id as u128;
-            event.tags.push(Tag::pow(0, difficulty));
-            let pow_tag_index = event.tags.len() - 1;
+
+            let mut tags: TagsMut = event.tags.into_mut();
+            assert!(tags.push(Nip13Tag::Nonce { nonce, difficulty }));
 
             loop {
                 nonce += num_threads as u128;
@@ -89,12 +90,21 @@ fn mine(unsigned: UnsignedEvent, difficulty: u8, cancel: Arc<AtomicBool>) -> Opt
                     }
                 }
 
-                event.tags[pow_tag_index] = Tag::pow(nonce, difficulty);
-                let id = event.compute_id();
+                tags.pop();
+                tags.push(Nip13Tag::Nonce { nonce, difficulty });
+
+                let id: EventId = EventId::compute_staged(
+                    &event.pubkey,
+                    &event.created_at,
+                    &event.kind,
+                    &tags,
+                    &event.content,
+                );
 
                 if id.check_pow(difficulty) {
                     found.store(true, Ordering::SeqCst);
                     event.id = Some(id);
+                    event.tags = tags.freeze();
                     return Some(event);
                 }
             }
@@ -151,7 +161,7 @@ pub mod tests {
         };
 
         assert!(unsigned.id.is_some());
-        assert_eq!(nonce_tag.as_slice()[2], "2");
+        assert_eq!(nonce_tag.get(2), Some("2"));
         assert!(get_leading_zero_bits(unsigned.id.unwrap()) >= 2)
     }
 

@@ -288,10 +288,7 @@ impl NostrSqlite {
 
         if options.process_nip62
             && event.kind == Kind::RequestToVanish
-            && nip62::is_valid_vanish_request_for_relay(
-                event.tags.as_slice(),
-                options.relay_url.as_ref(),
-            )
+            && nip62::is_valid_vanish_request_for_relay(&event.tags, options.relay_url.as_ref())
         {
             Self::handle_request_to_vanish(&tx, &event.pubkey)?;
         }
@@ -904,7 +901,7 @@ fn with_limit(filter: Filter, default_limit: usize) -> Filter {
 
 #[cfg(test)]
 mod tests {
-    use nostr::event::{EventBuilder, Tag};
+    use nostr::event::EventBuilder;
     use nostr::key::Keys;
     use nostr_database_test_suite::database_unit_tests;
 
@@ -953,11 +950,11 @@ mod tests {
 
         let event = EventBuilder::new(Kind::TextNote)
             .content("content")
-            .tag(Tag::parse(["title", "alpha-token"]).unwrap())
-            .tag(Tag::parse(["description", "beta-token"]).unwrap())
-            .tag(Tag::parse(["subject", "gamma-token"]).unwrap())
-            .tag(Tag::parse(["name", "delta-token"]).unwrap())
-            .tag(Tag::identifier("epsilon-token"))
+            .tag(["title", "alpha-token"])
+            .tag(["description", "beta-token"])
+            .tag(["subject", "gamma-token"])
+            .tag(["name", "delta-token"])
+            .tag(Nip01Tag::identifier("epsilon-token"))
             .finalize(&keys)
             .unwrap();
 

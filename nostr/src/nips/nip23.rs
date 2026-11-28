@@ -6,11 +6,10 @@
 //!
 //! <https://github.com/nostr-protocol/nips/blob/master/23.md>
 
-use alloc::string::{String, ToString};
-use alloc::vec;
+use alloc::string::String;
 
 use crate::error::Error;
-use crate::event::{Tag, impl_tag_codec_conversions};
+use crate::event::impl_tag_codec_conversions;
 use crate::nips::util::{
     missing_tag_kind, take_and_parse_from_str, take_string, take_timestamp, unknown_tag,
 };
@@ -65,15 +64,28 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
+    fn write(self, tx) {
         match self {
-            Self::Title(title) => Tag::new(vec![String::from(TITLE), title.clone()]),
-            Self::Image(url) => Tag::new(vec![String::from(IMAGE), url.to_string()]),
-            Self::Summary(summary) => Tag::new(vec![String::from(SUMMARY), summary.clone()]),
-            Self::PublishedAt(timestamp) => {
-                Tag::new(vec![String::from(PUBLISHED_AT), timestamp.to_string()])
+            Self::Title(title) => {
+                tx.push_str(TITLE);
+                tx.push_str(&title);
             }
-            Self::Hashtag(hashtag) => Tag::new(vec![String::from(HASHTAG), hashtag.to_lowercase()]),
+            Self::Image(url) => {
+                tx.push_str(IMAGE);
+                tx.push_str(url.as_str());
+            }
+            Self::Summary(summary) => {
+                tx.push_str(SUMMARY);
+                tx.push_str(&summary);
+            }
+            Self::PublishedAt(timestamp) => {
+                tx.push_str(PUBLISHED_AT);
+                tx.push_u64(timestamp.as_secs());
+            }
+            Self::Hashtag(hashtag) => {
+                tx.push_str(HASHTAG);
+                tx.push_str(&hashtag.to_lowercase());
+            }
         }
     }
 }
@@ -90,13 +102,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::Tags;
 
     #[test]
     fn test_parse_title_tag() {
         let tag = vec!["title", "Lorem Ipsum"];
         let parsed = Nip23Tag::parse(&tag).unwrap();
         assert_eq!(parsed, Nip23Tag::Title(String::from("Lorem Ipsum")));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -107,7 +120,7 @@ mod tests {
             parsed,
             Nip23Tag::Image(Url::parse("https://example.com/image.jpg").unwrap())
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -115,7 +128,7 @@ mod tests {
         let tag = vec!["summary", "Article summary"];
         let parsed = Nip23Tag::parse(&tag).unwrap();
         assert_eq!(parsed, Nip23Tag::Summary(String::from("Article summary")));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -123,17 +136,14 @@ mod tests {
         let tag = vec!["published_at", "1296962229"];
         let parsed = Nip23Tag::parse(&tag).unwrap();
         assert_eq!(parsed, Nip23Tag::PublishedAt(Timestamp::from(1296962229)));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
     fn test_parse_hashtag_tag() {
-        let tag = vec!["t", "Placeholder"];
+        let tag = vec!["t", "placeholder"];
         let parsed = Nip23Tag::parse(&tag).unwrap();
         assert_eq!(parsed, Nip23Tag::Hashtag(String::from("placeholder")));
-        assert_eq!(
-            parsed.to_tag(),
-            Tag::parse(vec!["t", "placeholder"]).unwrap()
-        );
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 }

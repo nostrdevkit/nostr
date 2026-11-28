@@ -6,8 +6,6 @@
 //!
 //! <https://github.com/nostr-protocol/nips/blob/master/A0.md>
 
-use alloc::string::{String, ToString};
-
 use url::Url;
 
 use super::nip22::CommentTarget;
@@ -16,20 +14,19 @@ use crate::event::{EventBuilder, IntoEventBuilder, Kind};
 /// Voice message reply builder.
 #[derive(Debug, Clone)]
 pub struct VoiceMessageReplyBuilder<'a> {
-    voice_url: String,
+    voice_url: Url,
     parent: CommentTarget<'a>,
     root: Option<CommentTarget<'a>>,
 }
 
 impl<'a> VoiceMessageReplyBuilder<'a> {
     /// Create a voice message reply.
-    pub fn new<T, U>(voice_url: U, parent: T) -> Self
+    pub fn new<T>(voice_url: Url, parent: T) -> Self
     where
         T: Into<CommentTarget<'a>>,
-        U: Into<Url>,
     {
         Self {
-            voice_url: voice_url.into().to_string(),
+            voice_url,
             parent: parent.into(),
             root: None,
         }
@@ -47,14 +44,16 @@ impl<'a> VoiceMessageReplyBuilder<'a> {
 
 impl IntoEventBuilder for VoiceMessageReplyBuilder<'_> {
     fn into_event_builder(self) -> EventBuilder {
-        EventBuilder::new(Kind::VoiceMessageReply)
-            .content(self.voice_url)
-            .tags(
-                self.root
-                    .map(|target| target.as_vec(true))
-                    .unwrap_or_default(),
-            )
-            .tags(self.parent.as_vec(false))
+        let mut builder: EventBuilder =
+            EventBuilder::new(Kind::VoiceMessageReply).content(self.voice_url.as_str());
+
+        if let Some(root) = self.root {
+            root.extend_tags(&mut builder.tags, true);
+        }
+
+        self.parent.extend_tags(&mut builder.tags, false);
+
+        builder
     }
 }
 
@@ -74,6 +73,6 @@ mod tests {
 
         assert_eq!(builder.kind, Kind::VoiceMessageReply);
         assert_eq!(builder.content, "https://example.com/message.ogg");
-        assert!(builder.tags.iter().any(|tag| tag.kind() == "e"));
+        assert!(builder.tags.freeze().iter().any(|tag| tag.kind() == "e"));
     }
 }

@@ -6,12 +6,12 @@
 //!
 //! <https://github.com/nostr-protocol/nips/blob/master/62.md>
 
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::error::Error;
-use crate::event::{EventBuilder, IntoEventBuilder, Kind, Tag, impl_tag_codec_conversions};
+use crate::event::{EventBuilder, IntoEventBuilder, Kind, Tags, impl_tag_codec_conversions};
 use crate::nips::util::{missing_tag_kind, missing_value, unknown_tag};
 use crate::types::url::RelayUrl;
 
@@ -79,18 +79,20 @@ impl VanishRequest {
 
 impl IntoEventBuilder for VanishRequest {
     fn into_event_builder(self) -> EventBuilder {
-        let tags: Vec<Tag> = match self.target {
-            VanishTarget::AllRelays => vec![Nip62Tag::AllRelays.to_tag()],
-            VanishTarget::Relays(relays) => relays
-                .into_iter()
-                .map(Nip62Tag::Relay)
-                .map(Into::into)
-                .collect(),
+        let mut builder: EventBuilder =
+            EventBuilder::new(Kind::RequestToVanish).content(self.reason);
+
+        match self.target {
+            VanishTarget::AllRelays => {
+                builder.tags.push(Nip62Tag::AllRelays);
+            }
+            VanishTarget::Relays(relays) => {
+                builder.tags.reserve(relays.len());
+                builder.tags.extend(relays.into_iter().map(Nip62Tag::Relay));
+            }
         };
 
-        EventBuilder::new(Kind::RequestToVanish)
-            .content(self.reason)
-            .tags(tags)
+        builder
     }
 }
 
@@ -125,10 +127,16 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
+    fn write(self, tx) {
         match self {
-            Self::AllRelays => Tag::new(vec![String::from(RELAY), String::from(ALL_RELAYS)]),
-            Self::Relay(relay) => Tag::new(vec![String::from(RELAY), relay.to_string()]),
+            Self::AllRelays => {
+                tx.push_str(RELAY);
+                tx.push_str(ALL_RELAYS);
+            }
+            Self::Relay(relay) => {
+                tx.push_str(RELAY);
+                tx.push_str(relay.as_str());
+            }
         }
     }
 }
@@ -158,7 +166,7 @@ where
 ///
 /// Returns `false` for events with a different kind or for events that do not
 /// target the given relay.
-pub fn is_valid_vanish_request_for_relay(tags: &[Tag], relay_url: Option<&RelayUrl>) -> bool {
+pub fn is_valid_vanish_request_for_relay(tags: &Tags, relay_url: Option<&RelayUrl>) -> bool {
     tags.iter().any(|tag| match Nip62Tag::try_from(tag) {
         Ok(Nip62Tag::AllRelays) => true,
         Ok(Nip62Tag::Relay(relay)) => Some(&relay) == relay_url,
@@ -179,7 +187,7 @@ mod tests {
             parsed,
             Nip62Tag::Relay(RelayUrl::parse("wss://relay.damus.io").unwrap())
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -187,7 +195,7 @@ mod tests {
         let tag = vec!["relay", "ALL_RELAYS"];
         let parsed = Nip62Tag::parse(&tag).unwrap();
         assert_eq!(parsed, Nip62Tag::AllRelays);
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -202,11 +210,11 @@ mod tests {
         );
 
         assert!(is_valid_vanish_request_for_relay(
-            all_relays.tags.as_slice(),
+            &all_relays.tags,
             Some(&relay_a)
         ));
         assert!(is_valid_vanish_request_for_relay(
-            all_relays.tags.as_slice(),
+            &all_relays.tags,
             Some(&relay_b)
         ));
 
@@ -219,11 +227,11 @@ mod tests {
             );
 
         assert!(is_valid_vanish_request_for_relay(
-            single_relay.tags.as_slice(),
+            &single_relay.tags,
             Some(&relay_a)
         ));
         assert!(!is_valid_vanish_request_for_relay(
-            single_relay.tags.as_slice(),
+            &single_relay.tags,
             Some(&relay_b)
         ));
 
@@ -237,7 +245,7 @@ mod tests {
             );
 
         assert!(!is_valid_vanish_request_for_relay(
-            other_kind.tags.as_slice(),
+            &other_kind.tags,
             Some(&relay_a)
         ));
     }

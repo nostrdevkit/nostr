@@ -7,7 +7,6 @@
 //! <https://github.com/nostr-protocol/nips/blob/master/53.md>
 
 use alloc::string::{String, ToString};
-use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt;
 use core::str::FromStr;
@@ -22,7 +21,7 @@ use super::util::{
 };
 use crate::error::{Error, ErrorKind};
 use crate::event::{
-    Event, EventBuilder, EventId, IntoEventBuilder, Kind, Tag, impl_tag_codec_conversions,
+    Event, EventBuilder, EventId, IntoEventBuilder, Kind, Tags, impl_tag_codec_conversions,
 };
 use crate::key::PublicKey;
 use crate::types::Timestamp;
@@ -290,68 +289,110 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
+    fn write(self, tx) {
         match self {
-            Self::Title(title) => Tag::new(vec![String::from(TITLE), title.clone()]),
-            Self::Summary(summary) => Tag::new(vec![String::from(SUMMARY), summary.clone()]),
-            Self::Image(image) => Tag::new(vec![String::from(IMAGE), image.to_string()]),
-            Self::Hashtag(hashtag) => Tag::new(vec![String::from("t"), hashtag.clone()]),
-            Self::Streaming(url) => Tag::new(vec![String::from(STREAMING), url.to_string()]),
-            Self::Recording(url) => Tag::new(vec![String::from(RECORDING), url.to_string()]),
-            Self::Starts(timestamp) => Tag::new(vec![String::from(STARTS), timestamp.to_string()]),
-            Self::Ends(timestamp) => Tag::new(vec![String::from(ENDS), timestamp.to_string()]),
-            Self::Status(status) => Tag::new(vec![String::from(STATUS), status.to_string()]),
+            Self::Title(title) => {
+                tx.push_str(TITLE);
+                tx.push_str(&title);
+            }
+            Self::Summary(summary) => {
+                tx.push_str(SUMMARY);
+                tx.push_str(&summary);
+            }
+            Self::Image(image) => {
+                tx.push_str(IMAGE);
+                tx.push_str(image.as_str());
+            }
+            Self::Hashtag(hashtag) => {
+                tx.push_str("t");
+                tx.push_str(&hashtag);
+            }
+            Self::Streaming(url) => {
+                tx.push_str(STREAMING);
+                tx.push_str(url.as_str());
+            }
+            Self::Recording(url) => {
+                tx.push_str(RECORDING);
+                tx.push_str(url.as_str());
+            }
+            Self::Starts(timestamp) => {
+                tx.push_str(STARTS);
+                tx.push_u64(timestamp.as_secs());
+            }
+            Self::Ends(timestamp) => {
+                tx.push_str(ENDS);
+                tx.push_u64(timestamp.as_secs());
+            }
+            Self::Status(status) => {
+                tx.push_str(STATUS);
+                tx.push_str(status.as_str());
+            }
             Self::CurrentParticipants(count) => {
-                Tag::new(vec![String::from(CURRENT_PARTICIPANTS), count.to_string()])
+                tx.push_str(CURRENT_PARTICIPANTS);
+                tx.push_str(&count.to_string());
             }
             Self::TotalParticipants(count) => {
-                Tag::new(vec![String::from(TOTAL_PARTICIPANTS), count.to_string()])
+                tx.push_str(TOTAL_PARTICIPANTS);
+                tx.push_str(&count.to_string());
             }
             Self::Relays(relays) => {
-                let mut tag: Vec<String> = Vec::with_capacity(1 + relays.len());
-                tag.push(String::from(RELAYS));
-                tag.extend(relays.iter().map(|relay| relay.to_string()));
-                Tag::new(tag)
+                tx.push_str(RELAYS);
+
+                for relay in &relays {
+                    tx.push_str(relay.as_str());
+                }
             }
             Self::Participant(participant) => {
-                let mut tag = vec![
-                    String::from("p"),
-                    participant.public_key.to_string(),
+                tx.push_str("p");
+                tx.push_hex(participant.public_key.as_bytes());
+                tx.push_str(
                     participant
                         .relay_url
                         .as_ref()
-                        .map(|relay| relay.to_string())
+                        .map(|relay| relay.as_str())
                         .unwrap_or_default(),
-                    participant.marker.to_string(),
-                ];
-                if let Some(proof) = participant.proof {
-                    tag.push(proof.to_string());
+                );
+                tx.push_str(participant.marker.as_str());
+
+                if let Some(proof) = &participant.proof {
+                    tx.push_str(&proof.to_string());
                 }
-                Tag::new(tag)
             }
-            Self::Room(room) => Tag::new(vec![String::from(ROOM), room.clone()]),
-            Self::Service(service) => Tag::new(vec![String::from(SERVICE), service.to_string()]),
+            Self::Room(room) => {
+                tx.push_str(ROOM);
+                tx.push_str(&room);
+            }
+            Self::Service(service) => {
+                tx.push_str(SERVICE);
+                tx.push_str(service.as_str());
+            }
             Self::Endpoint(endpoint) => {
-                Tag::new(vec![String::from(ENDPOINT), endpoint.to_string()])
+                tx.push_str(ENDPOINT);
+                tx.push_str(endpoint.as_str());
             }
-            Self::Pinned(event_id) => Tag::new(vec![String::from(PINNED), event_id.to_hex()]),
+            Self::Pinned(event_id) => {
+                tx.push_str(PINNED);
+                tx.push_hex(event_id.as_bytes());
+            }
             Self::Space(space) => {
-                let mut tag = vec![String::from("a"), space.coordinate.to_string()];
+                tx.push_str("a");
+                tx.push_str(&space.coordinate.to_string());
+
                 if let Some(relay_url) = &space.relay_url {
-                    tag.push(relay_url.to_string());
+                    tx.push_str(relay_url.as_str());
                 }
                 if let Some(marker) = &space.marker {
                     if space.relay_url.is_none() {
-                        tag.push(String::new());
+                        tx.push_str("");
                     }
-                    tag.push(marker.clone());
+
+                    tx.push_str(marker.as_str());
                 }
-                Tag::new(tag)
             }
-            Self::Hand(hand) => Tag::new(vec![
-                String::from(HAND),
-                if *hand { "1" } else { "0" }.to_string(),
-            ]),
+            Self::Hand(hand) => {
+                tx.push_str(HAND);
+                tx.push_str(if hand { "1" } else { "0" });
+            }
         }
     }
 }
@@ -626,13 +667,6 @@ impl LiveEvent {
 
 impl IntoEventBuilder for LiveEvent {
     fn into_event_builder(self) -> EventBuilder {
-        let tags: Vec<Tag> = self.into();
-        EventBuilder::new(Kind::LiveEvent).tags(tags)
-    }
-}
-
-impl From<LiveEvent> for Vec<Tag> {
-    fn from(live_event: LiveEvent) -> Self {
         let LiveEvent {
             kind: _,
             id,
@@ -659,80 +693,93 @@ impl From<LiveEvent> for Vec<Tag> {
             speakers,
             participants,
             hand,
-        } = live_event;
+        } = self;
 
-        let mut tags = Vec::with_capacity(1);
+        let mut builder: EventBuilder = EventBuilder::new(Kind::LiveEvent);
+
+        builder.tags.reserve(
+            6 + hashtags.len()
+                + pinned.len()
+                + owners.len()
+                + moderators.len()
+                + speakers.len()
+                + participants.len(),
+        );
 
         if !id.is_empty() {
-            tags.push(Tag::identifier(id));
+            builder.tags.push(Nip01Tag::identifier(id));
         }
 
         if let Some(room) = room {
-            tags.push(Nip53Tag::Room(room).to_tag());
+            builder.tags.push(Nip53Tag::Room(room));
         }
 
         if let Some(space) = space {
-            tags.push(Nip53Tag::Space(space).to_tag());
+            builder.tags.push(Nip53Tag::Space(space));
         }
 
         if let Some(title) = title {
-            tags.push(Nip53Tag::Title(title).to_tag());
+            builder.tags.push(Nip53Tag::Title(title));
         }
 
         if let Some(summary) = summary {
-            tags.push(Nip53Tag::Summary(summary).to_tag());
+            builder.tags.push(Nip53Tag::Summary(summary));
         }
 
         if let Some(image) = image {
-            tags.push(Nip53Tag::Image(image).to_tag());
+            builder.tags.push(Nip53Tag::Image(image));
         }
 
-        for hashtag in hashtags.into_iter() {
-            tags.push(Nip53Tag::Hashtag(hashtag).to_tag());
+        for hashtag in hashtags {
+            builder.tags.push(Nip53Tag::Hashtag(hashtag));
         }
 
         if let Some(streaming) = streaming {
-            tags.push(Nip53Tag::Streaming(streaming).to_tag());
+            builder.tags.push(Nip53Tag::Streaming(streaming));
         }
 
         if let Some(recording) = recording {
-            tags.push(Nip53Tag::Recording(recording).to_tag());
+            builder.tags.push(Nip53Tag::Recording(recording));
         }
 
         if let Some(service) = service {
-            tags.push(Nip53Tag::Service(service).to_tag());
+            builder.tags.push(Nip53Tag::Service(service));
         }
 
         if let Some(endpoint) = endpoint {
-            tags.push(Nip53Tag::Endpoint(endpoint).to_tag());
+            builder.tags.push(Nip53Tag::Endpoint(endpoint));
         }
 
         if let Some(starts) = starts {
-            tags.push(Nip53Tag::Starts(starts).to_tag());
+            builder.tags.push(Nip53Tag::Starts(starts));
         }
 
         if let Some(ends) = ends {
-            tags.push(Nip53Tag::Ends(ends).to_tag());
+            builder.tags.push(Nip53Tag::Ends(ends));
         }
 
         if let Some(status) = status {
-            tags.push(Nip53Tag::Status(status).to_tag());
+            builder.tags.push(Nip53Tag::Status(status));
         }
 
         if let Some(current_participants) = current_participants {
-            tags.push(Nip53Tag::CurrentParticipants(current_participants).to_tag());
+            builder
+                .tags
+                .push(Nip53Tag::CurrentParticipants(current_participants));
         }
 
         if let Some(total_participants) = total_participants {
-            tags.push(Nip53Tag::TotalParticipants(total_participants).to_tag());
+            builder
+                .tags
+                .push(Nip53Tag::TotalParticipants(total_participants));
         }
 
         if !relays.is_empty() {
-            tags.push(Nip53Tag::Relays(relays).to_tag());
+            builder.tags.push(Nip53Tag::Relays(relays));
         }
 
-        for event_id in pinned.into_iter() {
-            tags.push(Nip53Tag::Pinned(event_id).to_tag());
+        for event_id in pinned {
+            builder.tags.push(Nip53Tag::Pinned(event_id));
         }
 
         if let Some(LiveEventHost {
@@ -741,77 +788,72 @@ impl From<LiveEvent> for Vec<Tag> {
             proof,
         }) = host
         {
-            tags.push(
-                Nip53Tag::Participant(LiveEventParticipant {
+            builder
+                .tags
+                .push(Nip53Tag::Participant(LiveEventParticipant {
                     public_key,
                     relay_url,
                     marker: LiveEventMarker::Host,
                     proof,
-                })
-                .to_tag(),
-            );
+                }));
         }
 
-        for (public_key, relay_url) in owners.into_iter() {
-            tags.push(
-                Nip53Tag::Participant(LiveEventParticipant {
+        for (public_key, relay_url) in owners {
+            builder
+                .tags
+                .push(Nip53Tag::Participant(LiveEventParticipant {
                     public_key,
                     relay_url,
                     marker: LiveEventMarker::Owner,
                     proof: None,
-                })
-                .to_tag(),
-            );
+                }));
         }
 
-        for (public_key, relay_url) in moderators.into_iter() {
-            tags.push(
-                Nip53Tag::Participant(LiveEventParticipant {
+        for (public_key, relay_url) in moderators {
+            builder
+                .tags
+                .push(Nip53Tag::Participant(LiveEventParticipant {
                     public_key,
                     relay_url,
                     marker: LiveEventMarker::Moderator,
                     proof: None,
-                })
-                .to_tag(),
-            );
+                }));
         }
 
-        for (public_key, relay_url) in speakers.into_iter() {
-            tags.push(
-                Nip53Tag::Participant(LiveEventParticipant {
+        for (public_key, relay_url) in speakers {
+            builder
+                .tags
+                .push(Nip53Tag::Participant(LiveEventParticipant {
                     public_key,
                     relay_url,
                     marker: LiveEventMarker::Speaker,
                     proof: None,
-                })
-                .to_tag(),
-            );
+                }));
         }
 
-        for (public_key, relay_url) in participants.into_iter() {
-            tags.push(
-                Nip53Tag::Participant(LiveEventParticipant {
+        for (public_key, relay_url) in participants {
+            builder
+                .tags
+                .push(Nip53Tag::Participant(LiveEventParticipant {
                     public_key,
                     relay_url,
                     marker: LiveEventMarker::Participant,
                     proof: None,
-                })
-                .to_tag(),
-            );
+                }));
         }
 
         if let Some(hand) = hand {
-            tags.push(Nip53Tag::Hand(hand).to_tag());
+            builder.tags.push(Nip53Tag::Hand(hand));
         }
 
-        tags
+        builder
     }
 }
 
-impl TryFrom<Vec<Tag>> for LiveEvent {
+impl TryFrom<Tags> for LiveEvent {
     type Error = Error;
 
-    fn try_from(tags: Vec<Tag>) -> Result<Self, Self::Error> {
+    fn try_from(tags: Tags) -> Result<Self, Self::Error> {
         let id: String = tags
             .iter()
             .find(|t| t.kind() == "d")
@@ -821,7 +863,7 @@ impl TryFrom<Vec<Tag>> for LiveEvent {
 
         let mut live_event = LiveEvent::new(id);
 
-        for tag in tags.into_iter() {
+        for tag in tags {
             let parsed = match Nip53Tag::try_from(tag) {
                 Ok(tag) => tag,
                 Err(e) if e.kind() == ErrorKind::Malformed => continue,

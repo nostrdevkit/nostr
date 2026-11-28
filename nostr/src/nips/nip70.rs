@@ -6,10 +6,7 @@
 //!
 //! <https://github.com/nostr-protocol/nips/blob/master/70.md>
 
-use alloc::string::String;
-use alloc::vec;
-
-use crate::event::{Tag, impl_tag_codec_conversions};
+use crate::event::impl_tag_codec_conversions;
 use crate::nips::util::{missing_tag_kind, unknown_tag};
 
 /// Standardized NIP-70 tags
@@ -39,22 +36,22 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
-        match self {
-            Self::Protected => Tag::new(vec![String::from("-")]),
-        }
+    fn write(self, tx) {
+        let Self::Protected = self;
+        tx.push_str("-");
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::Tags;
 
     #[test]
     fn test_standardized_protected_tag() {
         let tag = vec!["-"];
         let parsed = Nip70Tag::parse(&tag).unwrap();
         assert_eq!(parsed, Nip70Tag::Protected);
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 }

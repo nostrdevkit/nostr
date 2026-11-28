@@ -556,7 +556,7 @@ mod tests {
 
     use super::*;
     use crate::error::ErrorKind;
-    use crate::event::{Kind, Signature};
+    use crate::event::{Kind, Signature, Tags};
     use crate::key::PublicKey;
     use crate::types::Timestamp;
 
@@ -620,7 +620,7 @@ mod tests {
         let content = "test";
         let sig = Signature::from_str("273a9cd5d11455590f4359500bccb7a89428262b96b3ea87a756b770964472f8c3e87f5d5e64d8d2e859a71462a3f477b554565c4f2f326cb01dd7620db71502").unwrap();
 
-        let handled_event = Event::new(id, pubkey, created_at, kind, [], content, sig);
+        let handled_event = Event::new(id, pubkey, created_at, kind, Tags::new(), content, sig);
 
         assert_eq!(
             RelayMessage::from_json(valid_event_msg).unwrap(),
@@ -728,7 +728,7 @@ mod tests {
         let content = "test";
         let sig = Signature::from_str("273a9cd5d11455590f4359500bccb7a89428262b96b3ea87a756b770964472f8c3e87f5d5e64d8d2e859a71462a3f477b554565c4f2f326cb01dd7620db71502").unwrap();
 
-        let event = Event::new(id, pubkey, created_at, kind, [], content, sig);
+        let event = Event::new(id, pubkey, created_at, kind, Tags::new(), content, sig);
 
         let parsed_event = RelayMessage::from_json(SAMPLE_EVENT).expect("Failed to parse event");
 

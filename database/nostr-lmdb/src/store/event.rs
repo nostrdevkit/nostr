@@ -4,12 +4,11 @@
 
 use core::cmp::Ordering;
 use core::hash::{Hash, Hasher};
-use std::slice::Iter;
 use std::str::FromStr;
 
 use flatbuffers::{FlatBufferBuilder, ForwardsUOffset, Vector, VectorIter};
 use nostr::error::{Error, ErrorKind};
-use nostr::event::{Event, EventId, Kind, Signature, Tag, Tags};
+use nostr::event::{Event, EventId, Kind, Signature, TagRef, Tags, TagsIter};
 use nostr::filter::SingleLetterTag;
 use nostr::key::PublicKey;
 use nostr::types::Timestamp;
@@ -39,14 +38,24 @@ impl<'a> DatabaseTags<'a> {
     pub(crate) fn iter(&'a self) -> DatabaseTagsIter<'a> {
         DatabaseTagsIter(match &self.0 {
             InnerTags::FlatBuf(vec) => InnerTagsIter::FlatBuf(vec.iter()),
-            InnerTags::Tags(vec) => InnerTagsIter::Vector(vec.iter()),
+            InnerTags::Tags(vec) => InnerTagsIter::Tags(vec.iter()),
         })
+    }
+
+    #[inline]
+    fn into_owned(self) -> Tags {
+        match self.0 {
+            InnerTags::FlatBuf(tags) => {
+                Tags::parse(tags.into_iter().filter_map(|t| t.data())).expect("non-empty tag")
+            }
+            InnerTags::Tags(tags) => tags.clone(),
+        }
     }
 }
 
 enum InnerTagsIter<'a> {
     FlatBuf(VectorIter<'a, ForwardsUOffset<StringVector<'a>>>),
-    Vector(Iter<'a, Tag>),
+    Tags(TagsIter<'a>),
 }
 
 pub(crate) struct DatabaseTagsIter<'a>(InnerTagsIter<'a>);
@@ -69,11 +78,10 @@ impl<'a> Iterator for DatabaseTagsIter<'a> {
 
                 return Some(tag);
             },
-            InnerTagsIter::Vector(iter) => loop {
-                let item: &Tag = iter.next()?;
-                let data: &[String] = item.as_slice();
+            InnerTagsIter::Tags(iter) => loop {
+                let item: TagRef<'a> = iter.next()?;
 
-                let Ok(tag) = DatabaseTag::new(InnerTag::Slice(data)) else {
+                let Ok(tag) = DatabaseTag::new(InnerTag::TagRef(item)) else {
                     continue;
                 };
 
@@ -86,7 +94,7 @@ impl<'a> Iterator for DatabaseTagsIter<'a> {
 #[derive(Debug, Clone)]
 enum InnerTag<'a> {
     FlatBuf(Vector<'a, ForwardsUOffset<&'a str>>),
-    Slice(&'a [String]),
+    TagRef(TagRef<'a>),
 }
 
 #[derive(Debug, Clone)]
@@ -94,13 +102,12 @@ pub(crate) struct DatabaseTag<'a>(InnerTag<'a>);
 
 impl<'a> DatabaseTag<'a> {
     fn new(tag: InnerTag<'a>) -> Result<Self, Error> {
-        let is_empty: bool = match &tag {
-            InnerTag::FlatBuf(vec) => vec.is_empty(),
-            InnerTag::Slice(vec) => vec.is_empty(),
-        };
-
-        if is_empty {
-            return Err(Error::with_static_message(ErrorKind::Invalid, "empty tag"));
+        // Check if the flatbuf tag is empty
+        // We don't check for the TagRef because it can't be empty
+        if let InnerTag::FlatBuf(vec) = &tag {
+            if vec.is_empty() {
+                return Err(Error::with_static_message(ErrorKind::Invalid, "empty tag"));
+            }
         }
 
         Ok(Self(tag))
@@ -110,14 +117,14 @@ impl<'a> DatabaseTag<'a> {
     fn len(&self) -> usize {
         match &self.0 {
             InnerTag::FlatBuf(vec) => vec.len(),
-            InnerTag::Slice(vec) => vec.len(),
+            InnerTag::TagRef(tag) => tag.len(),
         }
     }
 
     fn get(&self, index: usize) -> &'a str {
         match &self.0 {
             InnerTag::FlatBuf(vec) => vec.get(index),
-            InnerTag::Slice(vec) => vec[index].as_str(),
+            InnerTag::TagRef(tag) => tag.get(index).expect("field index in range"),
         }
     }
 
@@ -147,15 +154,6 @@ impl<'a> DatabaseTag<'a> {
         let tag_name: SingleLetterTag = SingleLetterTag::from_str(self.get(0)).ok()?;
         let tag_value: &str = self.get(1);
         Some((tag_name, tag_value))
-    }
-
-    fn into_owned(self) -> Tag {
-        let buf: Vec<String> = match self.0 {
-            InnerTag::FlatBuf(vec) => vec.into_iter().map(|t| t.to_string()).collect(),
-            InnerTag::Slice(vec) => vec.iter().map(|t| t.to_string()).collect(),
-        };
-        // SAFETY: buf is not empty
-        unsafe { Tag::new_unchecked(buf) }
     }
 }
 
@@ -303,10 +301,10 @@ impl<'a> DatabaseEvent<'a> {
             PublicKey::from_byte_array(*self.pubkey),
             self.created_at,
             Kind::from_u16(self.kind),
-            Tags::from_list(self.tags.iter().map(|t| t.into_owned()).collect()),
+            self.tags.into_owned(),
             self.content,
             // SAFETY: signature panic only if it's not 64 byte long
-            Signature::from_slice(self.sig.as_slice()).expect("valid signature"),
+            Signature::from_byte_array(*self.sig),
         )
     }
 }

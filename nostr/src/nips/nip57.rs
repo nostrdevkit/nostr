@@ -7,17 +7,16 @@
 //! <https://github.com/nostr-protocol/nips/blob/master/57.md>
 
 use alloc::string::{String, ToString};
-use alloc::vec;
 use alloc::vec::Vec;
 
-use super::nip01::Coordinate;
+use super::nip01::{Coordinate, Nip01Tag};
 use super::util::{
     missing_tag_kind, take_and_parse_from_str, take_and_parse_optional_from_str, take_public_key,
     take_relay_url, take_string, unknown_tag,
 };
 use crate::error::Error;
 use crate::event::{
-    Event, EventBuilder, EventId, IntoEventBuilder, Kind, Tag, impl_tag_codec_conversions,
+    Event, EventBuilder, EventId, IntoEventBuilder, Kind, impl_tag_codec_conversions,
 };
 use crate::key::PublicKey;
 use crate::types::RelayUrl;
@@ -98,44 +97,55 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
+    fn write(self, tx) {
         match self {
             Self::Relays(relays) => {
-                let mut tag: Vec<String> = Vec::with_capacity(relays.len() + 1);
-                tag.push(String::from(RELAYS));
-                tag.extend(relays.iter().map(ToString::to_string));
-                Tag::new(tag)
+                tx.push_str(RELAYS);
+
+                for relay in &relays {
+                    tx.push_str(relay.as_str());
+                }
             }
             Self::Amount { millisats, bolt11 } => {
-                let mut tag: Vec<String> = vec![String::from(AMOUNT), millisats.to_string()];
+                tx.push_str(AMOUNT);
+                tx.push_u64(millisats);
+
                 if let Some(bolt11) = bolt11 {
-                    tag.push(bolt11.clone());
+                    tx.push_str(&bolt11);
                 }
-                Tag::new(tag)
             }
-            Self::Lnurl(lnurl) => Tag::new(vec![String::from(LNURL), lnurl.clone()]),
-            Self::Bolt11(bolt11) => Tag::new(vec![String::from(BOLT11), bolt11.clone()]),
+            Self::Lnurl(lnurl) => {
+                tx.push_str(LNURL);
+                tx.push_str(&lnurl);
+            }
+            Self::Bolt11(bolt11) => {
+                tx.push_str(BOLT11);
+                tx.push_str(&bolt11);
+            }
             Self::Description(description) => {
-                Tag::new(vec![String::from(DESCRIPTION), description.clone()])
+                tx.push_str(DESCRIPTION);
+                tx.push_str(&description);
             }
-            Self::Preimage(preimage) => Tag::new(vec![String::from(PREIMAGE), preimage.clone()]),
-            Self::Sender(public_key) => Tag::new(vec![String::from(SENDER), public_key.to_hex()]),
+            Self::Preimage(preimage) => {
+                tx.push_str(PREIMAGE);
+                tx.push_str(&preimage);
+            }
+            Self::Sender(public_key) => {
+                tx.push_str(SENDER);
+                tx.push_hex(public_key.as_bytes());
+            }
             Self::Zap {
                 public_key,
                 relay_url,
                 weight,
             } => {
-                let mut tag: Vec<String> = vec![
-                    String::from(ZAP),
-                    public_key.to_hex(),
-                    relay_url.to_string(),
-                ];
+                tx.push_str(ZAP);
+                tx.push_hex(public_key.as_bytes());
+                tx.push_str(relay_url.as_str());
 
                 if let Some(weight) = weight {
-                    tag.push(weight.to_string());
+                    tx.push_u64(weight);
                 }
-
-                Tag::new(tag)
             }
         }
     }
@@ -238,23 +248,28 @@ impl<'a> ZapReceipt<'a> {
 
 impl IntoEventBuilder for ZapReceipt<'_> {
     fn into_event_builder(self) -> EventBuilder {
-        let mut tags: Vec<Tag> = vec![
-            Nip57Tag::Bolt11(self.bolt11).to_tag(),
-            Nip57Tag::Description(self.zap_request.as_json()).to_tag(),
-        ];
+        let mut builder: EventBuilder = EventBuilder::new(Kind::ZapReceipt);
+
+        builder.tags.reserve(6);
+
+        builder.tags.push(Nip57Tag::Bolt11(self.bolt11));
+        builder
+            .tags
+            .push(Nip57Tag::Description(self.zap_request.as_json()));
 
         if let Some(preimage) = self.preimage {
-            tags.push(Nip57Tag::Preimage(preimage).to_tag());
+            builder.tags.push(Nip57Tag::Preimage(preimage));
         }
 
         for kind in ["e", "a", "p"] {
             if let Some(tag) = self.zap_request.tags.iter().find(|tag| tag.kind() == kind) {
-                tags.push(tag.clone());
+                builder.tags.push(tag);
             }
         }
 
-        tags.push(Nip57Tag::Sender(self.zap_request.pubkey).to_tag());
-        EventBuilder::new(Kind::ZapReceipt).tags(tags)
+        builder.tags.push(Nip57Tag::Sender(self.zap_request.pubkey));
+
+        builder
     }
 }
 
@@ -324,61 +339,53 @@ impl ZapRequestData {
 
 impl IntoEventBuilder for ZapRequestData {
     fn into_event_builder(self) -> EventBuilder {
-        let message: String = self.message.clone();
-        let tags: Vec<Tag> = self.into();
-        EventBuilder::new(Kind::ZapRequest)
-            .content(message)
-            .tags(tags)
-    }
-}
-
-impl From<ZapRequestData> for Vec<Tag> {
-    fn from(data: ZapRequestData) -> Self {
         let ZapRequestData {
             public_key,
             relays,
+            message,
             amount,
             lnurl,
             event_id,
             event_coordinate,
-            ..
-        } = data;
+        } = self;
 
-        let mut tags: Vec<Tag> = vec![Tag::public_key(public_key)];
+        let mut builder: EventBuilder = EventBuilder::new(Kind::ZapRequest).content(message);
+
+        builder.tags.reserve(4);
+
+        builder.tags.push(Nip01Tag::public_key(public_key));
 
         if !relays.is_empty() {
-            tags.push(Nip57Tag::Relays(relays).into());
+            builder.tags.push(Nip57Tag::Relays(relays));
         }
 
         if let Some(event_id) = event_id {
-            tags.push(Tag::event(event_id));
+            builder.tags.push(Nip01Tag::event(event_id));
         }
 
         if let Some(event_coordinate) = event_coordinate {
-            tags.push(event_coordinate.into());
+            builder.tags.push(event_coordinate);
         }
 
         if let Some(amount) = amount {
-            tags.push(
-                Nip57Tag::Amount {
-                    millisats: amount,
-                    bolt11: None,
-                }
-                .into(),
-            );
+            builder.tags.push(Nip57Tag::Amount {
+                millisats: amount,
+                bolt11: None,
+            });
         }
 
         if let Some(lnurl) = lnurl {
-            tags.push(Nip57Tag::Lnurl(lnurl).into());
+            builder.tags.push(Nip57Tag::Lnurl(lnurl));
         }
 
-        tags
+        builder
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::Tags;
     #[cfg(all(feature = "std", feature = "os-rng"))]
     use crate::event::{FinalizeEvent, IntoEventBuilder};
     #[cfg(all(feature = "std", feature = "os-rng"))]
@@ -397,8 +404,8 @@ mod tests {
             ])
         );
         assert_eq!(
-            parsed.to_tag(),
-            Tag::parse(["relays", "wss://relay.damus.io", "wss://relay.primal.net"]).unwrap()
+            Tags::from_iter([parsed]),
+            Tags::parse([["relays", "wss://relay.damus.io", "wss://relay.primal.net"]]).unwrap()
         );
     }
 
@@ -415,8 +422,8 @@ mod tests {
             }
         );
         assert_eq!(
-            parsed.to_tag(),
-            Tag::parse(["amount", "21000", "lnbc21u1p0test"]).unwrap()
+            Tags::from_iter([parsed]),
+            Tags::parse([["amount", "21000", "lnbc21u1p0test"]]).unwrap()
         );
     }
 
@@ -433,11 +440,11 @@ mod tests {
 
         assert_eq!(parsed, Nip57Tag::Sender(public_key));
         assert_eq!(
-            parsed.to_tag(),
-            Tag::parse([
+            Tags::from_iter([parsed]),
+            Tags::parse([[
                 "P",
                 "97c70a44366a6535c145b333f973ea86dfdc2d7a99da618c40c64705ad98e322",
-            ])
+            ]])
             .unwrap()
         );
     }
@@ -465,13 +472,13 @@ mod tests {
             }
         );
         assert_eq!(
-            parsed.to_tag(),
-            Tag::parse([
+            Tags::from_iter([parsed]),
+            Tags::parse([[
                 "zap",
                 "82341f882b6eabcd2ba7f1ef90aad961cf074af15b9ef44a09f9d2a8fbfbe6a2",
                 "wss://nostr.oxtr.dev",
                 "2",
-            ])
+            ]])
             .unwrap()
         );
     }
@@ -490,12 +497,14 @@ mod tests {
         let with_preimage = ZapReceipt::new("bolt11", &request)
             .preimage("preimage")
             .into_event_builder();
-        let without_preimage = ZapReceipt::new("bolt11", &request).into_event_builder();
+        let tags_with_preimage = with_preimage.tags.freeze();
 
-        assert!(with_preimage.tags.iter().any(|tag| tag.kind() == PREIMAGE));
+        let without_preimage = ZapReceipt::new("bolt11", &request).into_event_builder();
+        let tags_without_preimage = without_preimage.tags.freeze();
+
+        assert!(tags_with_preimage.iter().any(|tag| tag.kind() == PREIMAGE));
         assert!(
-            !without_preimage
-                .tags
+            !tags_without_preimage
                 .iter()
                 .any(|tag| tag.kind() == PREIMAGE)
         );

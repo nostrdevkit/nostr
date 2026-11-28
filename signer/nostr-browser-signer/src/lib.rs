@@ -149,12 +149,7 @@ impl BrowserSigner {
         let tags: Array = unsigned
             .tags
             .iter()
-            .map(|t| {
-                t.as_slice()
-                    .iter()
-                    .map(|v| JsValue::from_str(v))
-                    .collect::<Array>()
-            })
+            .map(|t| t.iter().map(JsValue::from_str).collect::<Array>())
             .collect();
 
         if let Some(id) = unsigned.id {

@@ -5,17 +5,15 @@
 //!
 //! <https://github.com/nostr-protocol/nips/blob/master/51.md>
 
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 
-use super::nip01::Coordinate;
+use super::nip01::{Coordinate, Nip01Tag};
 use super::nip30::Nip30Tag;
 use super::util::{
     missing_tag_kind, take_event_id, take_public_key, take_relay_url, take_string, unknown_tag,
 };
-use crate::event::{
-    EventBuilder, EventId, IntoEventBuilder, Kind, Tag, impl_tag_codec_conversions,
-};
+use crate::event::{EventBuilder, EventId, IntoEventBuilder, Kind, impl_tag_codec_conversions};
 use crate::key::PublicKey;
 use crate::types::url::{RelayUrl, Url};
 
@@ -70,15 +68,28 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
+    fn write(self, tx) {
         match self {
             Self::PublicKey(public_key) => {
-                Tag::new(vec![String::from(PUBLIC_KEY), public_key.to_hex()])
+                tx.push_str(PUBLIC_KEY);
+                tx.push_hex(public_key.as_bytes());
             }
-            Self::Hashtag(hashtag) => Tag::new(vec![String::from(HASHTAG), hashtag.to_lowercase()]),
-            Self::Event(event_id) => Tag::new(vec![String::from(EVENT), event_id.to_hex()]),
-            Self::Relay(relay_url) => Tag::new(vec![String::from(RELAY), relay_url.to_string()]),
-            Self::Word(word) => Tag::new(vec![String::from(WORD), word.clone()]),
+            Self::Hashtag(hashtag) => {
+                tx.push_str(HASHTAG);
+                tx.push_str(&hashtag.to_lowercase());
+            }
+            Self::Event(event_id) => {
+                tx.push_str(EVENT);
+                tx.push_hex(event_id.as_bytes());
+            }
+            Self::Relay(relay_url) => {
+                tx.push_str(RELAY);
+                tx.push_str(relay_url.as_str());
+            }
+            Self::Word(word) => {
+                tx.push_str(WORD);
+                tx.push_str(&word);
+            }
         }
     }
 }
@@ -96,36 +107,13 @@ pub struct MuteList {
     pub words: Vec<String>,
 }
 
-impl From<MuteList> for Vec<Tag> {
-    fn from(
-        MuteList {
-            public_keys,
-            hashtags,
-            event_ids,
-            words,
-        }: MuteList,
-    ) -> Self {
-        let mut tags =
-            Vec::with_capacity(public_keys.len() + hashtags.len() + event_ids.len() + words.len());
-
-        tags.extend(
-            public_keys
-                .into_iter()
-                .map(Nip51Tag::PublicKey)
-                .map(Into::into),
-        );
-        tags.extend(hashtags.into_iter().map(Nip51Tag::Hashtag).map(Into::into));
-        tags.extend(event_ids.into_iter().map(Nip51Tag::Event).map(Into::into));
-        tags.extend(words.into_iter().map(Nip51Tag::Word).map(Into::into));
-
-        tags
-    }
-}
-
 impl IntoEventBuilder for MuteList {
     fn into_event_builder(self) -> EventBuilder {
-        let tags: Vec<Tag> = self.into();
-        EventBuilder::new(Kind::MuteList).tags(tags)
+        EventBuilder::new(Kind::MuteList)
+            .tags(self.public_keys.into_iter().map(Nip51Tag::PublicKey))
+            .tags(self.hashtags.into_iter().map(Nip51Tag::Hashtag))
+            .tags(self.event_ids.into_iter().map(Nip51Tag::Event))
+            .tags(self.words.into_iter().map(Nip51Tag::Word))
     }
 }
 
@@ -138,26 +126,11 @@ pub struct Bookmarks {
     pub coordinate: Vec<Coordinate>,
 }
 
-impl From<Bookmarks> for Vec<Tag> {
-    fn from(
-        Bookmarks {
-            event_ids,
-            coordinate,
-        }: Bookmarks,
-    ) -> Self {
-        let mut tags = Vec::with_capacity(event_ids.len() + coordinate.len());
-
-        tags.extend(event_ids.into_iter().map(Tag::event));
-        tags.extend(coordinate.into_iter().map(Tag::from));
-
-        tags
-    }
-}
-
 impl IntoEventBuilder for Bookmarks {
     fn into_event_builder(self) -> EventBuilder {
-        let tags: Vec<Tag> = self.into();
-        EventBuilder::new(Kind::Bookmarks).tags(tags)
+        EventBuilder::new(Kind::Bookmarks)
+            .tags(self.event_ids.into_iter().map(Nip01Tag::event))
+            .tags(self.coordinate.into_iter().map(Nip01Tag::from))
     }
 }
 
@@ -170,26 +143,11 @@ pub struct Interests {
     pub coordinate: Vec<Coordinate>,
 }
 
-impl From<Interests> for Vec<Tag> {
-    fn from(
-        Interests {
-            hashtags,
-            coordinate,
-        }: Interests,
-    ) -> Self {
-        let mut tags = Vec::with_capacity(hashtags.len() + coordinate.len());
-
-        tags.extend(hashtags.into_iter().map(Tag::hashtag));
-        tags.extend(coordinate.into_iter().map(Tag::from));
-
-        tags
-    }
-}
-
 impl IntoEventBuilder for Interests {
     fn into_event_builder(self) -> EventBuilder {
-        let tags: Vec<Tag> = self.into();
-        EventBuilder::new(Kind::Interests).tags(tags)
+        EventBuilder::new(Kind::Interests)
+            .tags(self.hashtags.into_iter().map(Nip51Tag::Hashtag))
+            .tags(self.coordinate.into_iter().map(Nip01Tag::from))
     }
 }
 
@@ -202,53 +160,19 @@ pub struct Emojis {
     pub coordinate: Vec<Coordinate>,
 }
 
-impl From<Emojis> for Vec<Tag> {
-    fn from(Emojis { emojis, coordinate }: Emojis) -> Self {
-        let mut tags = Vec::with_capacity(emojis.len() + coordinate.len());
-
-        tags.extend(emojis.into_iter().map(|(shortcode, image_url)| {
-            Nip30Tag::Emoji {
-                shortcode,
-                image_url,
-                emoji_set: None,
-            }
-            .to_tag()
-        }));
-        tags.extend(coordinate.into_iter().map(Tag::from));
-
-        tags
-    }
-}
-
 impl IntoEventBuilder for Emojis {
     fn into_event_builder(self) -> EventBuilder {
-        let tags: Vec<Tag> = self.into();
-        EventBuilder::new(Kind::Emojis).tags(tags)
-    }
-}
-
-/// Groups of articles picked by users as interesting and/or belonging to the same category
-#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ArticlesCuration {
-    /// Coordinates
-    pub coordinate: Vec<Coordinate>,
-    /// Event IDs
-    pub event_ids: Vec<EventId>,
-}
-
-impl From<ArticlesCuration> for Vec<Tag> {
-    fn from(
-        ArticlesCuration {
-            coordinate,
-            event_ids,
-        }: ArticlesCuration,
-    ) -> Self {
-        let mut tags = Vec::with_capacity(coordinate.len() + event_ids.len());
-
-        tags.extend(coordinate.into_iter().map(Tag::from));
-        tags.extend(event_ids.into_iter().map(Tag::event));
-
-        tags
+        EventBuilder::new(Kind::Emojis)
+            .tags(
+                self.emojis
+                    .into_iter()
+                    .map(|(shortcode, image_url)| Nip30Tag::Emoji {
+                        shortcode,
+                        image_url,
+                        emoji_set: None,
+                    }),
+            )
+            .tags(self.coordinate.into_iter().map(Nip01Tag::from))
     }
 }
 
@@ -272,7 +196,7 @@ impl PinnedNotes {
 
 impl IntoEventBuilder for PinnedNotes {
     fn into_event_builder(self) -> EventBuilder {
-        EventBuilder::new(Kind::PinList).tags(self.event_ids.into_iter().map(Tag::event))
+        EventBuilder::new(Kind::PinList).tags(self.event_ids.into_iter().map(Nip01Tag::event))
     }
 }
 
@@ -296,7 +220,7 @@ impl Communities {
 
 impl IntoEventBuilder for Communities {
     fn into_event_builder(self) -> EventBuilder {
-        EventBuilder::new(Kind::Communities).tags(self.coordinates.into_iter().map(Tag::from))
+        EventBuilder::new(Kind::Communities).tags(self.coordinates.into_iter().map(Nip01Tag::from))
     }
 }
 
@@ -320,7 +244,7 @@ impl PublicChats {
 
 impl IntoEventBuilder for PublicChats {
     fn into_event_builder(self) -> EventBuilder {
-        EventBuilder::new(Kind::PublicChats).tags(self.event_ids.into_iter().map(Tag::event))
+        EventBuilder::new(Kind::PublicChats).tags(self.event_ids.into_iter().map(Nip01Tag::event))
     }
 }
 
@@ -395,9 +319,9 @@ impl FollowSet {
 
 impl IntoEventBuilder for FollowSet {
     fn into_event_builder(self) -> EventBuilder {
-        let tags = core::iter::once(Tag::identifier(self.identifier))
-            .chain(self.public_keys.into_iter().map(Tag::public_key));
-        EventBuilder::new(Kind::FollowSet).tags(tags)
+        EventBuilder::new(Kind::FollowSet)
+            .tag(Nip01Tag::identifier(self.identifier))
+            .tags(self.public_keys.into_iter().map(Nip01Tag::public_key))
     }
 }
 
@@ -424,9 +348,9 @@ impl RelaySet {
 
 impl IntoEventBuilder for RelaySet {
     fn into_event_builder(self) -> EventBuilder {
-        let tags = core::iter::once(Tag::identifier(self.identifier))
-            .chain(self.relays.into_iter().map(Nip51Tag::Relay).map(Into::into));
-        EventBuilder::new(Kind::RelaySet).tags(tags)
+        EventBuilder::new(Kind::RelaySet)
+            .tag(Nip01Tag::identifier(self.identifier))
+            .tags(self.relays.into_iter().map(Nip51Tag::Relay))
     }
 }
 
@@ -452,10 +376,19 @@ impl BookmarkSet {
 
 impl IntoEventBuilder for BookmarkSet {
     fn into_event_builder(self) -> EventBuilder {
-        let mut tags: Vec<Tag> = self.bookmarks.into();
-        tags.push(Tag::identifier(self.identifier));
-        EventBuilder::new(Kind::BookmarkSet).tags(tags)
+        let mut builder: EventBuilder = self.bookmarks.into_event_builder();
+        builder.kind = Kind::BookmarkSet;
+        builder.tag(Nip01Tag::identifier(self.identifier))
     }
+}
+
+/// Groups of articles picked by users as interesting and/or belonging to the same category
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ArticlesCuration {
+    /// Coordinates
+    pub coordinate: Vec<Coordinate>,
+    /// Event IDs
+    pub event_ids: Vec<EventId>,
 }
 
 /// Articles curation set.
@@ -480,9 +413,10 @@ impl ArticlesCurationSet {
 
 impl IntoEventBuilder for ArticlesCurationSet {
     fn into_event_builder(self) -> EventBuilder {
-        let mut tags: Vec<Tag> = self.articles.into();
-        tags.push(Tag::identifier(self.identifier));
-        EventBuilder::new(Kind::ArticlesCurationSet).tags(tags)
+        EventBuilder::new(Kind::ArticlesCurationSet)
+            .tag(Nip01Tag::identifier(self.identifier))
+            .tags(self.articles.coordinate.into_iter().map(Nip01Tag::from))
+            .tags(self.articles.event_ids.into_iter().map(Nip01Tag::event))
     }
 }
 
@@ -509,12 +443,9 @@ impl VideosCurationSet {
 
 impl IntoEventBuilder for VideosCurationSet {
     fn into_event_builder(self) -> EventBuilder {
-        let tags = core::iter::once(Tag::identifier(self.identifier)).chain(
-            self.videos
-                .into_iter()
-                .map(|video| Tag::coordinate(video, None)),
-        );
-        EventBuilder::new(Kind::VideosCurationSet).tags(tags)
+        EventBuilder::new(Kind::VideosCurationSet)
+            .tag(Nip01Tag::identifier(self.identifier))
+            .tags(self.videos.into_iter().map(Nip01Tag::from))
     }
 }
 
@@ -542,9 +473,9 @@ impl InterestSet {
 
 impl IntoEventBuilder for InterestSet {
     fn into_event_builder(self) -> EventBuilder {
-        let tags = core::iter::once(Tag::identifier(self.identifier))
-            .chain(self.hashtags.into_iter().map(Tag::hashtag));
-        EventBuilder::new(Kind::InterestSet).tags(tags)
+        EventBuilder::new(Kind::InterestSet)
+            .tag(Nip01Tag::identifier(self.identifier))
+            .tags(self.hashtags.into_iter().map(Nip51Tag::Hashtag))
     }
 }
 
@@ -571,23 +502,24 @@ impl EmojiSet {
 
 impl IntoEventBuilder for EmojiSet {
     fn into_event_builder(self) -> EventBuilder {
-        let tags = core::iter::once(Tag::identifier(self.identifier)).chain(
-            self.emojis.into_iter().map(|(shortcode, image_url)| {
-                Nip30Tag::Emoji {
-                    shortcode,
-                    image_url,
-                    emoji_set: None,
-                }
-                .to_tag()
-            }),
-        );
-        EventBuilder::new(Kind::EmojiSet).tags(tags)
+        EventBuilder::new(Kind::EmojiSet)
+            .tag(Nip01Tag::identifier(self.identifier))
+            .tags(
+                self.emojis
+                    .into_iter()
+                    .map(|(shortcode, image_url)| Nip30Tag::Emoji {
+                        shortcode,
+                        image_url,
+                        emoji_set: None,
+                    }),
+            )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::Tags;
 
     #[test]
     fn test_public_key_tag() {
@@ -601,7 +533,7 @@ mod tests {
         let parsed = Nip51Tag::parse(&tag).unwrap();
 
         assert_eq!(parsed, Nip51Tag::PublicKey(public_key));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -610,7 +542,10 @@ mod tests {
         let parsed = Nip51Tag::parse(&tag).unwrap();
 
         assert_eq!(parsed, Nip51Tag::Hashtag(String::from("nostr")));
-        assert_eq!(parsed.to_tag(), Tag::parse(["t", "nostr"]).unwrap());
+        assert_eq!(
+            Tags::from_iter([parsed]),
+            Tags::parse([["t", "nostr"]]).unwrap()
+        );
     }
 
     #[test]
@@ -625,7 +560,7 @@ mod tests {
         let parsed = Nip51Tag::parse(&tag).unwrap();
 
         assert_eq!(parsed, Nip51Tag::Event(event_id));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -634,7 +569,7 @@ mod tests {
         let parsed = Nip51Tag::parse(&tag).unwrap();
 
         assert_eq!(parsed, Nip51Tag::Word(String::from("spam")));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -646,7 +581,7 @@ mod tests {
             parsed,
             Nip51Tag::Relay(RelayUrl::parse("wss://relay.damus.io").unwrap())
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -660,9 +595,10 @@ mod tests {
                 .unwrap();
         let follow_set = FollowSet::new("friends", [public_key]).into_event_builder();
         assert_eq!(follow_set.kind, Kind::FollowSet);
-        assert_eq!(follow_set.tags.identifier(), Some(String::from("friends")));
+        let follow_set_tags: Tags = follow_set.tags.into();
+        assert_eq!(follow_set_tags.identifier().as_deref(), Some("friends"));
         assert_eq!(
-            follow_set.tags.public_keys().collect::<Vec<_>>(),
+            follow_set_tags.public_keys().collect::<Vec<_>>(),
             [public_key]
         );
     }

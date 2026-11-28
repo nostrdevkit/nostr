@@ -11,9 +11,10 @@ use core::str::{self, FromStr};
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::{Kind, Tag, Tags};
+use super::{Kind, TagWriter, Tags, TagsMut, WriteTag};
 use crate::error::{Error, ErrorKind};
 use crate::key::PublicKey;
+use crate::nips::nip01::Nip01Tag;
 use crate::nips::nip13;
 use crate::nips::nip19::FromBech32;
 use crate::nips::nip21::FromNostrUri;
@@ -62,6 +63,20 @@ impl EventId {
                 .expect("serializing valid Nostr event fields must not fail");
         let hash: Sha256Hash = Sha256Hash::hash(&serialized);
         Self(hash)
+    }
+
+    #[must_use]
+    pub(crate) fn compute_staged(
+        public_key: &PublicKey,
+        created_at: &Timestamp,
+        kind: &Kind,
+        tags: &TagsMut,
+        content: &str,
+    ) -> Self {
+        let serialized: Vec<u8> =
+            serde_json::to_vec(&(0u8, public_key, created_at, kind, tags, content))
+                .expect("serializing valid Nostr event fields must not fail");
+        Self(Sha256Hash::hash(&serialized))
     }
 
     /// Construct from a 32-byte array
@@ -191,9 +206,15 @@ impl From<EventId> for String {
     }
 }
 
-impl From<EventId> for Tag {
+impl WriteTag for EventId {
+    fn write(self, tx: &mut TagWriter<'_>) {
+        Nip01Tag::event(self).write(tx)
+    }
+}
+
+impl From<EventId> for Nip01Tag {
     fn from(event_id: EventId) -> Self {
-        Tag::event(event_id)
+        Self::event(event_id)
     }
 }
 

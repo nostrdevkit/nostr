@@ -31,6 +31,7 @@ use crate::event::{
     UnsignedEvent,
 };
 use crate::key::{AsyncGetPublicKey, GetPublicKey, PublicKey};
+use crate::nips::nip01::Nip01Tag;
 use crate::types::url::form_urlencoded::byte_serialize;
 use crate::types::url::{RelayUrl, Url};
 #[cfg(all(feature = "std", feature = "os-rng"))]
@@ -1149,7 +1150,7 @@ where
 fn make_event_builder(nip44_encrypted_content: String, receiver: PublicKey) -> EventBuilder {
     EventBuilder::new(Kind::NostrConnect)
         .content(nip44_encrypted_content)
-        .tag(receiver)
+        .tag(Nip01Tag::public_key(receiver))
 }
 
 impl FromStr for NostrConnectUri {

@@ -11,7 +11,7 @@ use alloc::string::{String, ToString};
 use super::nip01::{Coordinate, Nip01Tag};
 use super::util::{missing_tag_kind, take_and_parse_from_str, unknown_tag};
 use crate::event::{
-    Event, EventBuilder, EventId, IntoEventBuilder, Kind, Tag, Tags, impl_tag_codec_conversions,
+    Event, EventBuilder, EventId, IntoEventBuilder, Kind, Tags, TagsMut, impl_tag_codec_conversions,
 };
 use crate::key::PublicKey;
 use crate::types::RelayUrl;
@@ -40,10 +40,11 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
-        match self {
-            Self::Kind(kind) => Tag::new(vec![String::from("k"), kind.to_string()]),
-        }
+    fn write(self, tx) {
+        let Self::Kind(kind) = self;
+
+        tx.push_str("k");
+        tx.push_str(&kind.to_string());
     }
 }
 
@@ -105,44 +106,35 @@ impl ReactionTarget {
     }
 
     pub(crate) fn into_tags(self) -> Tags {
-        let mut tags: Tags = Tags::with_capacity(
+        let mut tags: TagsMut = TagsMut::with_capacity(
             2 + usize::from(self.coordinate.is_some()) + usize::from(self.kind.is_some()),
         );
 
         // Serialization order: keep the `e` and `a` tags together, followed by the `p` and other tags.
 
-        tags.push(
-            Nip01Tag::Event {
-                id: self.event_id,
-                relay_hint: self.relay_hint.clone(),
-                public_key: Some(self.public_key),
-            }
-            .to_tag(),
-        );
+        tags.push(Nip01Tag::Event {
+            id: self.event_id,
+            relay_hint: self.relay_hint.clone(),
+            public_key: Some(self.public_key),
+        });
 
         if let Some(coordinate) = self.coordinate {
-            tags.push(
-                Nip01Tag::Coordinate {
-                    coordinate,
-                    relay_hint: self.relay_hint.clone(),
-                }
-                .to_tag(),
-            );
+            tags.push(Nip01Tag::Coordinate {
+                coordinate,
+                relay_hint: self.relay_hint.clone(),
+            });
         }
 
-        tags.push(
-            Nip01Tag::PublicKey {
-                public_key: self.public_key,
-                relay_hint: self.relay_hint,
-            }
-            .to_tag(),
-        );
+        tags.push(Nip01Tag::PublicKey {
+            public_key: self.public_key,
+            relay_hint: self.relay_hint,
+        });
 
         if let Some(kind) = self.kind {
-            tags.push(Nip25Tag::Kind(kind).to_tag());
+            tags.push(Nip25Tag::Kind(kind));
         }
 
-        tags
+        tags.freeze()
     }
 }
 
@@ -168,6 +160,6 @@ mod tests {
         let parsed = Nip25Tag::parse(&tag).unwrap();
 
         assert_eq!(parsed, Nip25Tag::Kind(Kind::TextNote));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 }

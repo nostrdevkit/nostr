@@ -621,10 +621,10 @@ impl BlossomClient {
 
     /// Submits a signed NIP-56 blob report according to BUD-09.
     pub async fn report_blobs(&self, report: &Event) -> Result<(), Error> {
-        let has_blob_hash = report.tags.iter().any(|tag| {
-            let values = tag.as_slice();
-            values.first().map(String::as_str) == Some("x") && values.get(1).is_some()
-        });
+        let has_blob_hash = report
+            .tags
+            .iter()
+            .any(|tag| tag.kind() == "x" && tag.len() > 1);
         if report.kind != Kind::Reporting || !has_blob_hash {
             return Err(Error::with_static_message(
                 ErrorKind::Invalid,

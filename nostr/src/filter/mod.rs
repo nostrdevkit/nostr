@@ -846,7 +846,8 @@ mod tests {
     use core::str::FromStr;
 
     use super::*;
-    use crate::event::{Signature, Tag};
+    use crate::event::{Signature, Tags};
+    use crate::nips::nip01::Nip01Tag;
 
     #[test]
     fn test_kind_concatenation() {
@@ -1044,8 +1045,8 @@ mod tests {
                 Timestamp::from(1612809991),
                 Kind::TextNote,
                 [
-                    Tag::public_key(PublicKey::from_str("b2d670de53b27691c0c3400225b65c35a26d06093bcc41f48ffc71e0907f9d4a").unwrap()),
-                    Tag::event(EventId::from_hex("7469af3be8c8e06e1b50ef1caceba30392ddc0b6614507398b7d7daa4c218e96").unwrap()),
+                    Nip01Tag::public_key(PublicKey::from_str("b2d670de53b27691c0c3400225b65c35a26d06093bcc41f48ffc71e0907f9d4a").unwrap()),
+                    Nip01Tag::event(EventId::from_hex("7469af3be8c8e06e1b50ef1caceba30392ddc0b6614507398b7d7daa4c218e96").unwrap()),
                 ],
                 "test",
                 Signature::from_str("273a9cd5d11455590f4359500bccb7a89428262b96b3ea87a756b770964472f8c3e87f5d5e64d8d2e859a71462a3f477b554565c4f2f326cb01dd7620db71502").unwrap(),
@@ -1055,7 +1056,7 @@ mod tests {
             pubkey,
             Timestamp::from(1612809992),
             Kind::TextNote,
-            [],
+            Tags::new(),
             "test",
             Signature::from_str("273a9cd5d11455590f4359500bccb7a89428262b96b3ea87a756b770964472f8c3e87f5d5e64d8d2e859a71462a3f477b554565c4f2f326cb01dd7620db71502").unwrap(),
         );
@@ -1168,43 +1169,6 @@ mod tests {
         let filter = Filter::new().search("");
         assert!(filter.match_event(&event, MatchEventOptions::new()));
     }
-
-    #[test]
-    fn test_filter_tag() {
-        // Happy path: a single-letter `t` (hashtag) tag is equivalent to the
-        // matching `custom_tag`/`hashtag` call
-        let filter: Filter = Filter::new().tag(Tag::hashtag("rust"));
-        assert_eq!(
-            filter,
-            Filter::new().custom_tag(SingleLetterTag::LOWERCASE_T, "rust")
-        );
-        assert_eq!(filter, Filter::new().hashtag("rust"));
-
-        // Multi-element single-letter tag: the indexed value is the element
-        // right after the tag name
-        let tag: Tag =
-            Tag::parse(["i", "github:yukibtc", "69d9980b6e6b5d77a3e1e369ccaca9ba"]).unwrap();
-        let filter: Filter = Filter::new().tag(tag);
-        assert_eq!(
-            filter,
-            Filter::new().custom_tag(SingleLetterTag::LOWERCASE_I, "github:yukibtc")
-        );
-
-        // Chaining the same letter accumulates both values in the generic-tag set
-        let filter: Filter = Filter::new()
-            .tag(Tag::hashtag("rust"))
-            .tag(Tag::hashtag("nostr"));
-        assert_eq!(filter, Filter::new().hashtags(["rust", "nostr"]));
-
-        // No-op: a tag with no single-letter representation leaves the filter
-        // unchanged rather than panicking
-        let filter: Filter = Filter::new().tag(Tag::expiration(Timestamp::zero()));
-        assert!(filter.is_empty());
-
-        // No-op: a single-letter tag with no value leaves the filter unchanged
-        let filter: Filter = Filter::new().tag(Tag::parse(["x"]).unwrap());
-        assert!(filter.is_empty());
-    }
 }
 
 #[cfg(bench)]
@@ -1228,10 +1192,10 @@ mod benches {
                 Timestamp::from(1612809991),
                 Kind::TextNote,
                 [
-                    Tag::public_key(PublicKey::from_hex("b2d670de53b27691c0c3400225b65c35a26d06093bcc41f48ffc71e0907f9d4a").unwrap()),
-                    Tag::public_key(PublicKey::from_hex("379e863e8357163b5bce5d2688dc4f1dcc2d505222fb8d74db600f30535dfdfe").unwrap()),
-                    Tag::event(EventId::from_hex("7469af3be8c8e06e1b50ef1caceba30392ddc0b6614507398b7d7daa4c218e96").unwrap()),
-                    Tag::custom("k", [Kind::TextNote.to_string()]),
+                    ["p", "b2d670de53b27691c0c3400225b65c35a26d06093bcc41f48ffc71e0907f9d4a"],
+                    ["p", "379e863e8357163b5bce5d2688dc4f1dcc2d505222fb8d74db600f30535dfdfe"],
+                    ["e", "7469af3be8c8e06e1b50ef1caceba30392ddc0b6614507398b7d7daa4c218e96"],
+                    ["k", "1"],
                 ],
                 "#JoininBox is a minimalistic, security focused Linux environment for #JoinMarket with a terminal based graphical menu.\n\nnostr:npub14tq8m9ggnnn2muytj9tdg0q6f26ef3snpd7ukyhvrxgq33vpnghs8shy62 👍🧡\n\nhttps://www.nobsbitcoin.com/joininbox-v0-8-0/",
                 Signature::from_str("273a9cd5d11455590f4359500bccb7a89428262b96b3ea87a756b770964472f8c3e87f5d5e64d8d2e859a71462a3f477b554565c4f2f326cb01dd7620db71502").unwrap(),

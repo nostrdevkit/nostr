@@ -7,8 +7,6 @@
 //! <https://github.com/nostr-protocol/nips/blob/master/73.md>
 
 use alloc::string::{String, ToString};
-use alloc::vec;
-use alloc::vec::Vec;
 use core::fmt;
 use core::str::FromStr;
 
@@ -16,7 +14,7 @@ use super::util::{
     missing_tag_kind, take_and_parse_from_str, take_and_parse_optional_from_str, unknown_tag,
 };
 use crate::error::{Error, ErrorKind};
-use crate::event::{Tag, impl_tag_codec_conversions};
+use crate::event::{TagWriter, impl_tag_codec_conversions};
 use crate::types::Url;
 
 const HASHTAG: &str = "#";
@@ -328,10 +326,12 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
+    fn write(self, tx) {
         match self {
-            Self::ExternalContent { content, hint } => serialize_i_tag(content, hint.as_ref()),
-            Self::Kind(kind) => serialize_k_tag(kind),
+            Self::ExternalContent { content, hint } => {
+                serialize_i_tag(tx, false, &content, hint.as_ref())
+            }
+            Self::Kind(kind) => serialize_k_tag(tx, false, &kind),
         }
     }
 }
@@ -348,27 +348,30 @@ where
     Ok((content, hint))
 }
 
-pub(super) fn serialize_i_tag(content: &ExternalContentId, hint: Option<&Url>) -> Tag {
-    let mut tag: Vec<String> = Vec::with_capacity(2 + hint.is_some() as usize);
-
-    tag.push(String::from("i"));
-    tag.push(content.to_string());
+pub(super) fn serialize_i_tag(
+    tx: &mut TagWriter,
+    uppercase: bool,
+    content: &ExternalContentId,
+    hint: Option<&Url>,
+) {
+    tx.push_str(if uppercase { "I" } else { "i" });
+    tx.push_str(&content.to_string());
 
     if let Some(hint) = hint {
-        tag.push(hint.to_string());
+        tx.push_str(hint.as_str());
     }
-
-    Tag::new(tag)
 }
 
 #[inline]
-pub(super) fn serialize_k_tag(kind: &Nip73Kind) -> Tag {
-    Tag::new(vec![String::from("k"), kind.to_string()])
+pub(super) fn serialize_k_tag(tx: &mut TagWriter, uppercase: bool, kind_value: &Nip73Kind) {
+    tx.push_str(if uppercase { "K" } else { "k" });
+    tx.push_str(&kind_value.to_string());
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::Tags;
 
     #[test]
     fn test_serialization() {
@@ -531,14 +534,14 @@ mod tests {
 
     #[test]
     fn test_i_tag() {
-        let raw = [
+        let tag = [
             "i",
             "https://myblog.example.com/post/2012-03-27/hello-world",
         ];
-        let tag = Nip73Tag::parse(raw).unwrap();
+        let parsed = Nip73Tag::parse(tag).unwrap();
 
         assert_eq!(
-            tag,
+            parsed,
             Nip73Tag::ExternalContent {
                 content: ExternalContentId::Url(
                     Url::parse("https://myblog.example.com/post/2012-03-27/hello-world").unwrap()
@@ -547,20 +550,20 @@ mod tests {
             }
         );
 
-        assert_eq!(tag.to_tag().as_slice(), &raw);
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
     fn test_i_tag_with_hint() {
-        let raw = [
+        let tag = [
             "i",
             "podcast:item:guid:d98d189b-dc7b-45b1-8720-d4b98690f31f",
             "https://fountain.fm/episode/z1y9TMQRuqXl2awyrQxg",
         ];
-        let tag = Nip73Tag::parse(raw).unwrap();
+        let parsed = Nip73Tag::parse(tag).unwrap();
 
         assert_eq!(
-            tag,
+            parsed,
             Nip73Tag::ExternalContent {
                 content: ExternalContentId::PodcastEpisode(
                     "d98d189b-dc7b-45b1-8720-d4b98690f31f".to_string()
@@ -569,19 +572,19 @@ mod tests {
             }
         );
 
-        assert_eq!(tag.to_tag().as_slice(), &raw);
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
     fn test_k_tag() {
-        let raw = ["k", "bitcoin:address"];
-        let tag = Nip73Tag::parse(raw).unwrap();
+        let tag = ["k", "bitcoin:address"];
+        let parsed = Nip73Tag::parse(tag).unwrap();
 
         assert_eq!(
-            tag,
+            parsed,
             Nip73Tag::Kind(Nip73Kind::BlockchainAddress(String::from("bitcoin")))
         );
 
-        assert_eq!(tag.to_tag().as_slice(), &raw);
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 }

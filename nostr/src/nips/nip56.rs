@@ -6,8 +6,6 @@
 //!
 //! <https://github.com/nostr-protocol/nips/blob/master/56.md>
 
-use alloc::string::{String, ToString};
-use alloc::vec;
 use core::fmt;
 use core::str::FromStr;
 
@@ -15,7 +13,7 @@ use super::util::{
     missing_tag_kind, take_and_parse_from_str, take_event_id, take_public_key, unknown_tag,
 };
 use crate::error::{Error, ErrorKind};
-use crate::event::{EventId, Tag, impl_tag_codec_conversions};
+use crate::event::{EventId, impl_tag_codec_conversions};
 use crate::key::PublicKey;
 
 #[inline]
@@ -126,16 +124,18 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
+    fn write(self, tx) {
         match self {
             Self::Event { id, report } => {
-                Tag::new(vec![String::from("e"), id.to_hex(), report.to_string()])
+                tx.push_str("e");
+                tx.push_hex(id.as_bytes());
+                tx.push_str(report.as_str());
             }
-            Self::PublicKey { public_key, report } => Tag::new(vec![
-                String::from("p"),
-                public_key.to_hex(),
-                report.to_string(),
-            ]),
+            Self::PublicKey { public_key, report } => {
+                tx.push_str("p");
+                tx.push_hex(public_key.as_bytes());
+                tx.push_str(report.as_str());
+            }
         }
     }
 }
@@ -165,6 +165,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::Tags;
 
     #[test]
     fn test_report_e_tag() {
@@ -185,7 +186,7 @@ mod tests {
                 report: Report::Nudity,
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -207,7 +208,7 @@ mod tests {
                 report: Report::Impersonation,
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]

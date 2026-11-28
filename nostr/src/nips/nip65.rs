@@ -6,13 +6,12 @@
 //!
 //! <https://github.com/nostr-protocol/nips/blob/master/65.md>
 
-use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
 use core::str::FromStr;
 
 use crate::error::{Error, ErrorKind};
-use crate::event::{Event, EventBuilder, IntoEventBuilder, Kind, Tag, impl_tag_codec_conversions};
+use crate::event::{Event, EventBuilder, IntoEventBuilder, Kind, impl_tag_codec_conversions};
 use crate::nips::util::{missing_tag_kind, take_relay_url, unknown_tag};
 use crate::types::RelayUrl;
 
@@ -47,15 +46,12 @@ impl RelayList {
 
 impl IntoEventBuilder for RelayList {
     fn into_event_builder(self) -> EventBuilder {
-        let tags = self.relays.into_iter().map(|(relay_url, metadata)| {
-            Nip65Tag::RelayMetadata {
+        EventBuilder::new(Kind::RelayList).tags(self.relays.into_iter().map(
+            |(relay_url, metadata)| Nip65Tag::RelayMetadata {
                 relay_url,
                 metadata,
-            }
-            .to_tag()
-        });
-
-        EventBuilder::new(Kind::RelayList).tags(tags)
+            },
+        ))
     }
 }
 
@@ -140,22 +136,20 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
+    fn write(self, tx) {
         match self {
             Self::RelayMetadata {
                 relay_url,
                 metadata,
             } => {
-                let mut tag: Vec<String> = Vec::with_capacity(2 + metadata.is_some() as usize);
+                tx.reserve(2 + metadata.is_some() as usize);
 
-                tag.push(String::from(RELAY_METADATA));
-                tag.push(relay_url.to_string());
+                tx.push_str(RELAY_METADATA);
+                tx.push_str(relay_url.as_str());
 
                 if let Some(metadata) = metadata {
-                    tag.push(metadata.to_string());
+                    tx.push_str(metadata.as_str());
                 }
-
-                Tag::new(tag)
             }
         }
     }
@@ -181,11 +175,12 @@ pub fn extract_relay_list(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::Tags;
 
     #[test]
     fn test_standardized_relay_metadata_tag() {
         let relay_url = RelayUrl::parse("wss://relay.damus.io").unwrap();
-        let tag = vec!["r".to_string(), relay_url.to_string(), String::from("read")];
+        let tag = vec!["r", relay_url.as_str(), "read"];
         let parsed = Nip65Tag::parse(&tag).unwrap();
 
         assert_eq!(
@@ -195,13 +190,13 @@ mod tests {
                 metadata: Some(RelayMetadata::Read),
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
     fn test_standardized_relay_metadata_tag_without_marker() {
         let relay_url = RelayUrl::parse("wss://relay.damus.io").unwrap();
-        let tag = vec!["r".to_string(), relay_url.to_string()];
+        let tag = vec!["r", relay_url.as_str()];
         let parsed = Nip65Tag::parse(&tag).unwrap();
 
         assert_eq!(
@@ -211,6 +206,6 @@ mod tests {
                 metadata: None,
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 }

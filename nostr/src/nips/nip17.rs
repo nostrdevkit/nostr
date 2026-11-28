@@ -10,8 +10,7 @@
 
 #[cfg(all(feature = "std", feature = "os-rng", feature = "nip59"))]
 use alloc::boxed::Box;
-use alloc::string::{String, ToString};
-use alloc::vec;
+use alloc::string::String;
 use alloc::vec::Vec;
 #[cfg(all(feature = "std", feature = "os-rng", feature = "nip59"))]
 use core::future::Future;
@@ -31,10 +30,14 @@ use crate::event::{
     AsyncSignEvent, FinalizeEvent, FinalizeEventAsync, FinalizeUnsignedEvent, SignEvent,
     UnsignedEvent,
 };
-use crate::event::{Event, EventBuilder, IntoEventBuilder, Kind, Tag, impl_tag_codec_conversions};
+use crate::event::{
+    Event, EventBuilder, IntoEventBuilder, Kind, TagsMut, WriteTag, impl_tag_codec_conversions,
+};
 use crate::key::PublicKey;
 #[cfg(all(feature = "std", feature = "os-rng", feature = "nip59"))]
 use crate::key::{AsyncGetPublicKey, GetPublicKey};
+#[cfg(all(feature = "std", feature = "os-rng", feature = "nip59"))]
+use crate::nips::nip01::Nip01Tag;
 use crate::types::url::RelayUrl;
 
 const RELAY: &str = "relay";
@@ -88,9 +91,9 @@ pub struct PrivateDirectMessageBuilder {
     /// Message.
     pub message: String,
     /// Extra tags to add to the **rumor** event.
-    pub rumor_extra_tags: Vec<Tag>,
+    pub rumor_extra_tags: TagsMut,
     /// Extra tags to add to the **gift wrap** event.
-    pub extra_tags: Vec<Tag>,
+    pub extra_tags: TagsMut,
     /// NIP-40 expiration for the **gift wrap**, relative to `created_at`.
     pub expiration: Option<Duration>,
 }
@@ -106,8 +109,8 @@ impl PrivateDirectMessageBuilder {
         Self {
             receiver,
             message: message.into(),
-            rumor_extra_tags: Vec::new(),
-            extra_tags: Vec::new(),
+            rumor_extra_tags: TagsMut::new(),
+            extra_tags: TagsMut::new(),
             expiration: None,
         }
     }
@@ -117,10 +120,9 @@ impl PrivateDirectMessageBuilder {
     pub fn rumor_extra_tags<I, T>(mut self, tags: I) -> Self
     where
         I: IntoIterator<Item = T>,
-        T: Into<Tag>,
+        T: WriteTag,
     {
-        self.rumor_extra_tags
-            .extend(tags.into_iter().map(Into::into));
+        self.rumor_extra_tags.extend(tags);
         self
     }
 
@@ -129,9 +131,9 @@ impl PrivateDirectMessageBuilder {
     pub fn extra_tags<I, T>(mut self, tags: I) -> Self
     where
         I: IntoIterator<Item = T>,
-        T: Into<Tag>,
+        T: WriteTag,
     {
-        self.extra_tags.extend(tags.into_iter().map(Into::into));
+        self.extra_tags.extend(tags);
         self
     }
 
@@ -163,7 +165,8 @@ where
             self.message,
             self.rumor_extra_tags,
         );
-        let mut builder = GiftWrapBuilder::new(self.receiver, rumor).extra_tags(self.extra_tags);
+        let mut builder = GiftWrapBuilder::new(self.receiver, rumor);
+        builder.extra_tags = self.extra_tags;
         if let Some(duration) = self.expiration {
             builder = builder.expiration(duration);
         }
@@ -195,8 +198,8 @@ where
                 self.message,
                 self.rumor_extra_tags,
             );
-            let mut builder =
-                GiftWrapBuilder::new(self.receiver, rumor).extra_tags(self.extra_tags);
+            let mut builder = GiftWrapBuilder::new(self.receiver, rumor);
+            builder.extra_tags = self.extra_tags;
             if let Some(duration) = self.expiration {
                 builder = builder.expiration(duration);
             }
@@ -211,12 +214,12 @@ fn make_rumor(
     sender: PublicKey,
     receiver: PublicKey,
     message: String,
-    extra_tags: Vec<Tag>,
+    extra_tags: TagsMut,
 ) -> UnsignedEvent {
-    EventBuilder::new(Kind::PrivateDirectMessage)
-        .content(message)
-        .tag(receiver)
-        .tags(extra_tags)
+    let mut builder: EventBuilder = EventBuilder::new(Kind::PrivateDirectMessage).content(message);
+    builder.tags = extra_tags;
+    builder
+        .tag(Nip01Tag::public_key(receiver))
         .finalize_unsigned(sender)
 }
 
@@ -250,10 +253,11 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
+    fn write(self, tx) {
         let Self::Relay(url) = self;
-        let tag: Vec<String> = vec![String::from(RELAY), url.to_string()];
-        Tag::new(tag)
+
+        tx.push_str(RELAY);
+        tx.push_str(url.as_str());
     }
 }
 
@@ -264,7 +268,7 @@ pub fn extract_relay_list(event: &Event) -> impl Iterator<Item = RelayUrl> + '_ 
     event
         .tags
         .iter()
-        .filter_map(|tag| match Nip17Tag::parse(tag.as_slice()) {
+        .filter_map(|tag| match Nip17Tag::try_from(tag) {
             Ok(Nip17Tag::Relay(url)) => Some(url),
             _ => None,
         })
@@ -272,8 +276,11 @@ pub fn extract_relay_list(event: &Event) -> impl Iterator<Item = RelayUrl> + '_ 
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+
     use super::*;
     use crate::error::ErrorKind;
+    use crate::event::Tags;
 
     #[test]
     fn test_parse_empty_tag() {
@@ -292,11 +299,11 @@ mod tests {
     #[test]
     fn test_standardized_relay_tag() {
         let relay = RelayUrl::parse("wss://relay.damus.io").unwrap();
-        let tag = vec!["relay".to_string(), relay.to_string()];
+        let tag = vec!["relay", relay.as_str()];
 
         let parsed = Nip17Tag::parse(&tag).unwrap();
         assert_eq!(parsed, Nip17Tag::Relay(relay.clone()));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]

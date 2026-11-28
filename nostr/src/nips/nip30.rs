@@ -7,7 +7,6 @@
 //! <https://github.com/nostr-protocol/nips/blob/master/30.md>
 
 use alloc::string::{String, ToString};
-use alloc::vec::Vec;
 
 use super::nip01::Coordinate;
 use super::util::{
@@ -15,7 +14,7 @@ use super::util::{
     unknown_tag,
 };
 use crate::error::{Error, ErrorKind};
-use crate::event::{Tag, impl_tag_codec_conversions};
+use crate::event::impl_tag_codec_conversions;
 use crate::types::url::Url;
 
 const EMOJI: &str = "emoji";
@@ -55,24 +54,19 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
-        match self {
-            Self::Emoji {
-                shortcode,
-                image_url,
-                emoji_set,
-            } => {
-                let mut tag: Vec<String> = Vec::with_capacity(3 + emoji_set.is_some() as usize);
-                tag.push(String::from(EMOJI));
-                tag.push(shortcode.clone());
-                tag.push(image_url.to_string());
+    fn write(self, tx) {
+        let Self::Emoji {
+            shortcode,
+            image_url,
+            emoji_set,
+        } = self;
 
-                if let Some(emoji_set) = emoji_set {
-                    tag.push(emoji_set.to_string());
-                }
+        tx.push_str(EMOJI);
+        tx.push_str(&shortcode);
+        tx.push_str(image_url.as_str());
 
-                Tag::new(tag)
-            }
+        if let Some(emoji_set) = emoji_set {
+            tx.push_str(&emoji_set.to_string());
         }
     }
 }
@@ -107,7 +101,7 @@ fn is_valid_shortcode(shortcode: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::Kind;
+    use crate::event::{Kind, Tags};
     use crate::key::PublicKey;
 
     #[test]
@@ -124,7 +118,7 @@ mod tests {
                 emoji_set: None,
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -152,7 +146,7 @@ mod tests {
                 emoji_set: Some(emoji_set),
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]

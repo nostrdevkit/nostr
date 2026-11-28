@@ -1,7 +1,7 @@
 //! Implements data structures specific to BUD-02
 
 use bitcoin_hashes::sha256::Hash as Sha256Hash;
-use nostr::event::Tag;
+use nostr::event::Tags;
 use nostr::types::{Timestamp, Url};
 use serde::{Deserialize, Serialize};
 
@@ -21,7 +21,7 @@ pub struct BlobDescriptor {
     pub uploaded: Timestamp,
     /// Optional NIP-94 file metadata tags returned according to BUD-08.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub nip94: Option<Vec<Tag>>,
+    pub nip94: Option<Tags>,
 }
 
 #[cfg(test)]

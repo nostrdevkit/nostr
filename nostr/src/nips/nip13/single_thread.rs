@@ -10,10 +10,10 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(feature = "std")]
 use super::AsyncPowAdapter;
-use super::PowAdapter;
 #[cfg(feature = "std")]
 use super::blocking_wrapper::BlockingPowFuture;
-use crate::event::{Tag, UnsignedEvent};
+use super::{Nip13Tag, PowAdapter};
+use crate::event::{EventId, TagsMut, UnsignedEvent};
 
 /// A single-threaded PoW miner implementation
 #[derive(Debug)]
@@ -61,8 +61,9 @@ pub(super) fn mine(
     cancel: Option<&AtomicBool>,
 ) -> Option<UnsignedEvent> {
     let mut nonce: u128 = 0;
-    unsigned.tags.push(Tag::pow(0, difficulty));
-    let pow_tag_index = unsigned.tags.len() - 1;
+
+    let mut tags: TagsMut = unsigned.tags.into_mut();
+    assert!(tags.push(Nip13Tag::Nonce { nonce, difficulty }));
 
     loop {
         if let Some(cancel) = cancel {
@@ -72,11 +73,21 @@ pub(super) fn mine(
         }
 
         nonce += 1;
-        unsigned.tags[pow_tag_index] = Tag::pow(nonce, difficulty);
-        let event_id = unsigned.compute_id();
+
+        tags.pop();
+        tags.push(Nip13Tag::Nonce { nonce, difficulty });
+
+        let event_id: EventId = EventId::compute_staged(
+            &unsigned.pubkey,
+            &unsigned.created_at,
+            &unsigned.kind,
+            &tags,
+            &unsigned.content,
+        );
 
         if event_id.check_pow(difficulty) {
             unsigned.id = Some(event_id);
+            unsigned.tags = tags.freeze();
             return Some(unsigned);
         }
     }
@@ -110,7 +121,7 @@ pub mod tests {
         };
 
         assert!(unsigned.id.is_some());
-        assert_eq!(nonce_tag.as_slice()[2], "2");
+        assert_eq!(nonce_tag.get(2), Some("2"));
         assert!(get_leading_zero_bits(unsigned.id.unwrap()) >= 2)
     }
 

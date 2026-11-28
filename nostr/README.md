@@ -134,6 +134,11 @@ AR="${LLVM_PATH}/bin/llvm-ar" CC="${LLVM_PATH}/bin/clang" cargo build --target w
 
 The other platforms should work out of the box.
 
+## 16-bit pointer sizes
+
+Targets with 16-bit pointer sizes are not supported. If you care about them please let us know,
+so we can know how large the interest is and possibly decide to support them.
+
 ## Embedded
 
 This crate support [`no_std`](https://docs.rust-embedded.org/book/intro/no-std.html) environments.

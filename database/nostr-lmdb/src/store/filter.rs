@@ -237,7 +237,7 @@ mod tests {
         let keys = Keys::generate();
         let event = EventBuilder::new(Kind::TextNote)
             .content("content")
-            .tag(Tag::parse(["title", "Search userfacing tags"]).unwrap())
+            .tag(["title", "Search userfacing tags"])
             .finalize(&keys)
             .unwrap();
         let event: DatabaseEvent = (&event).into();

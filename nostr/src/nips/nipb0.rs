@@ -6,12 +6,11 @@
 //!
 //! <https://github.com/nostr-protocol/nips/blob/master/B0.md>
 
-use alloc::string::{String, ToString};
-use alloc::vec;
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use super::util::{missing_tag_kind, take_string, take_timestamp, unknown_tag};
-use crate::event::{EventBuilder, IntoEventBuilder, Kind, Tag, impl_tag_codec_conversions};
+use crate::event::{EventBuilder, IntoEventBuilder, Kind, impl_tag_codec_conversions};
 use crate::types::Timestamp;
 
 const URL: &str = "d";
@@ -55,14 +54,24 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
+    fn write(self, tx) {
         match self {
-            Self::Url(url) => Tag::new(vec![String::from(URL), url.clone()]),
-            Self::PublishedAt(timestamp) => {
-                Tag::new(vec![String::from(PUBLISHED_AT), timestamp.to_string()])
+            Self::Url(url) => {
+                tx.push_str(URL);
+                tx.push_str(&url);
             }
-            Self::Title(title) => Tag::new(vec![String::from(TITLE), title.clone()]),
-            Self::Hashtag(hashtag) => Tag::new(vec![String::from(HASHTAG), hashtag.to_lowercase()]),
+            Self::PublishedAt(timestamp) => {
+                tx.push_str(PUBLISHED_AT);
+                tx.push_u64(timestamp.as_secs());
+            }
+            Self::Title(title) => {
+                tx.push_str(TITLE);
+                tx.push_str(&title);
+            }
+            Self::Hashtag(hashtag) => {
+                tx.push_str(HASHTAG);
+                tx.push_str(&hashtag.to_lowercase());
+            }
         }
     }
 }
@@ -130,63 +139,62 @@ impl WebBookmark {
 
 impl IntoEventBuilder for WebBookmark {
     fn into_event_builder(self) -> EventBuilder {
-        let mut tags: Vec<Tag> = vec![NipB0Tag::Url(self.url).into()];
+        let mut builder: EventBuilder =
+            EventBuilder::new(Kind::WebBookmark).content(self.description);
 
-        let mut add_if_some = |tag: Option<NipB0Tag>| {
-            if let Some(tag) = tag {
-                tags.push(tag.into());
-            }
-        };
+        builder.tags.reserve(2 + self.hashtags.len());
 
-        add_if_some(self.published_at.map(NipB0Tag::PublishedAt));
-        add_if_some(self.title.map(NipB0Tag::Title));
+        builder.tags.push(NipB0Tag::Url(self.url));
+        builder
+            .tags
+            .extend(self.published_at.map(NipB0Tag::PublishedAt));
+        builder.tags.extend(self.title.map(NipB0Tag::Title));
 
-        for hashtag in self.hashtags.into_iter() {
-            tags.push(NipB0Tag::Hashtag(hashtag).into());
+        for hashtag in self.hashtags {
+            builder.tags.push(NipB0Tag::Hashtag(hashtag));
         }
 
-        EventBuilder::new(Kind::WebBookmark)
-            .content(self.description)
-            .tags(tags)
+        builder
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::Tags;
 
     #[test]
     fn test_parse_url_tag() {
-        let tag = vec!["d", "alice.blog/post"];
-        let parsed = NipB0Tag::parse(&tag).unwrap();
+        let tag = ["d", "alice.blog/post"];
+        let parsed = NipB0Tag::parse(tag).unwrap();
         assert_eq!(parsed, NipB0Tag::Url(String::from("alice.blog/post")));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
     fn test_parse_published_at_tag() {
-        let tag = vec!["published_at", "1738863000"];
-        let parsed = NipB0Tag::parse(&tag).unwrap();
+        let tag = ["published_at", "1738863000"];
+        let parsed = NipB0Tag::parse(tag).unwrap();
         assert_eq!(parsed, NipB0Tag::PublishedAt(Timestamp::from(1738863000)));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
     fn test_parse_title_tag() {
-        let tag = vec!["title", "Blog insights by Alice"];
-        let parsed = NipB0Tag::parse(&tag).unwrap();
+        let tag = ["title", "Blog insights by Alice"];
+        let parsed = NipB0Tag::parse(tag).unwrap();
         assert_eq!(
             parsed,
             NipB0Tag::Title(String::from("Blog insights by Alice"))
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
     fn test_parse_hashtag_tag() {
-        let tag = vec!["t", "Insight"];
-        let parsed = NipB0Tag::parse(&tag).unwrap();
+        let tag = ["t", "insight"];
+        let parsed = NipB0Tag::parse(tag).unwrap();
         assert_eq!(parsed, NipB0Tag::Hashtag(String::from("insight")));
-        assert_eq!(parsed.to_tag(), Tag::parse(vec!["t", "insight"]).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 }

@@ -7,7 +7,6 @@
 //! <https://github.com/nostr-protocol/nips/blob/master/94.md>
 
 use alloc::string::{String, ToString};
-use alloc::vec;
 use alloc::vec::Vec;
 use core::str::FromStr;
 
@@ -16,7 +15,9 @@ use url::Url;
 pub use super::image::ImageDimensions;
 use super::util::{missing_tag_kind, take_and_parse_from_str, take_string, unknown_tag};
 use crate::error::{Error, ErrorKind};
-use crate::event::{EventBuilder, IntoEventBuilder, Kind, Tag, impl_tag_codec_conversions};
+use crate::event::{
+    EventBuilder, IntoEventBuilder, Kind, Tags, TagsMut, impl_tag_codec_conversions,
+};
 pub use crate::util::sha256::Sha256Hash;
 
 const URL: &str = "url";
@@ -144,43 +145,76 @@ impl_tag_codec_conversions! {
         }
     }
 
-    fn to_tag(&self) {
+    fn write(self, tx) {
         match self {
-            Self::Url(url) => Tag::new(vec![String::from(URL), url.to_string()]),
+            Self::Url(url) => {
+                tx.push_str(URL);
+                tx.push_str(url.as_str());
+            }
             Self::MimeType(mime_type) => {
-                Tag::new(vec![String::from(MIME_TYPE), mime_type.to_string()])
+                tx.push_str(MIME_TYPE);
+                tx.push_str(&mime_type);
             }
-            Self::Sha256(hash) => Tag::new(vec![String::from(SHA256), hash.to_string()]),
+            Self::Sha256(hash) => {
+                tx.push_str(SHA256);
+                tx.push_hex(hash.as_bytes());
+            }
             Self::OriginalHash(hash) => {
-                Tag::new(vec![String::from(ORIGINAL_HASH), hash.to_string()])
+                tx.push_str(ORIGINAL_HASH);
+                tx.push_hex(hash.as_bytes());
             }
-            Self::Size(size) => Tag::new(vec![String::from(SIZE), size.to_string()]),
-            Self::Dim(dim) => Tag::new(vec![String::from(DIMENSIONS), dim.to_string()]),
-            Self::Magnet(uri) => Tag::new(vec![String::from(MAGNET), uri.to_string()]),
+            Self::Size(size) => {
+                tx.push_str(SIZE);
+                tx.push_str(&size.to_string());
+            }
+            Self::Dim(dim) => {
+                tx.push_str(DIMENSIONS);
+                tx.push_str(&dim.to_string());
+            }
+            Self::Magnet(uri) => {
+                tx.push_str(MAGNET);
+                tx.push_str(&uri);
+            }
             Self::TorrentInfohash(infohash) => {
-                Tag::new(vec![String::from(TORRENT_INFOHASH), infohash.to_string()])
+                tx.push_str(TORRENT_INFOHASH);
+                tx.push_str(&infohash);
             }
             Self::Blurhash(blurhash) => {
-                Tag::new(vec![String::from(BLURHASH), blurhash.to_string()])
+                tx.push_str(BLURHASH);
+                tx.push_str(&blurhash);
             }
             Self::Thumb { url, hash } => {
-                let mut tag = vec![String::from(THUMB), url.to_string()];
+                tx.push_str(THUMB);
+                tx.push_str(url.as_str());
+
                 if let Some(hash) = hash {
-                    tag.push(hash.to_string());
+                    tx.push_hex(hash.as_bytes());
                 }
-                Tag::new(tag)
             }
             Self::Image { url, hash } => {
-                let mut tag = vec![String::from(IMAGE), url.to_string()];
+                tx.push_str(IMAGE);
+                tx.push_str(url.as_str());
+
                 if let Some(hash) = hash {
-                    tag.push(hash.to_string());
+                    tx.push_hex(hash.as_bytes());
                 }
-                Tag::new(tag)
             }
-            Self::Summary(summary) => Tag::new(vec![String::from(SUMMARY), summary.to_string()]),
-            Self::Alt(alt) => Tag::new(vec![String::from(ALT), alt.to_string()]),
-            Self::Fallback(url) => Tag::new(vec![String::from(FALLBACK), url.to_string()]),
-            Self::Service(service) => Tag::new(vec![String::from(SERVICE), service.to_string()]),
+            Self::Summary(summary) => {
+                tx.push_str(SUMMARY);
+                tx.push_str(&summary);
+            }
+            Self::Alt(alt) => {
+                tx.push_str(ALT);
+                tx.push_str(&alt);
+            }
+            Self::Fallback(url) => {
+                tx.push_str(FALLBACK);
+                tx.push_str(url.as_str());
+            }
+            Self::Service(service) => {
+                tx.push_str(SERVICE);
+                tx.push_str(&service);
+            }
         }
     }
 }
@@ -246,10 +280,10 @@ impl FileMetadataEventBuilder {
 
 impl IntoEventBuilder for FileMetadataEventBuilder {
     fn into_event_builder(self) -> EventBuilder {
-        let tags: Vec<Tag> = self.metadata.into();
-        EventBuilder::new(Kind::FileMetadata)
-            .content(self.description)
-            .tags(tags)
+        let mut builder: EventBuilder =
+            EventBuilder::new(Kind::FileMetadata).content(self.description);
+        builder.tags = self.metadata.into_tags_mut();
+        builder
     }
 }
 
@@ -381,10 +415,8 @@ impl FileMetadata {
         self.service = Some(service.into());
         self
     }
-}
 
-impl From<FileMetadata> for Vec<Tag> {
-    fn from(metadata: FileMetadata) -> Self {
+    fn into_tags_mut(self) -> TagsMut {
         let FileMetadata {
             url,
             mime_type,
@@ -403,82 +435,76 @@ impl From<FileMetadata> for Vec<Tag> {
             alt,
             fallback,
             service,
-        } = metadata;
+        } = self;
 
-        let mut tags: Vec<Tag> = Vec::with_capacity(3);
+        let mut tags: TagsMut = TagsMut::with_capacity(3 + fallback.len());
 
-        tags.push(Nip94Tag::Url(url).to_tag());
-        tags.push(Nip94Tag::MimeType(mime_type).to_tag());
-        tags.push(Nip94Tag::Sha256(hash).to_tag());
+        tags.push(Nip94Tag::Url(url));
+        tags.push(Nip94Tag::MimeType(mime_type));
+        tags.push(Nip94Tag::Sha256(hash));
 
         if let Some(hash) = original_hash {
-            tags.push(Nip94Tag::OriginalHash(hash).to_tag());
+            tags.push(Nip94Tag::OriginalHash(hash));
         }
 
         if let Some(size) = size {
-            tags.push(Nip94Tag::Size(size).to_tag());
+            tags.push(Nip94Tag::Size(size));
         }
 
         if let Some(dim) = dim {
-            tags.push(Nip94Tag::Dim(dim).to_tag());
+            tags.push(Nip94Tag::Dim(dim));
         }
 
         if let Some(magnet) = magnet {
-            tags.push(Nip94Tag::Magnet(magnet).to_tag());
+            tags.push(Nip94Tag::Magnet(magnet));
         }
 
         if let Some(infohash) = torrent_infohash {
-            tags.push(Nip94Tag::TorrentInfohash(infohash).to_tag());
+            tags.push(Nip94Tag::TorrentInfohash(infohash));
         }
 
         if let Some(blurhash) = blurhash {
-            tags.push(Nip94Tag::Blurhash(blurhash).to_tag());
+            tags.push(Nip94Tag::Blurhash(blurhash));
         }
 
         if let Some(url) = thumb {
-            tags.push(
-                Nip94Tag::Thumb {
-                    url,
-                    hash: thumb_hash,
-                }
-                .to_tag(),
-            );
+            tags.push(Nip94Tag::Thumb {
+                url,
+                hash: thumb_hash,
+            });
         }
 
         if let Some(url) = image {
-            tags.push(
-                Nip94Tag::Image {
-                    url,
-                    hash: image_hash,
-                }
-                .to_tag(),
-            );
+            tags.push(Nip94Tag::Image {
+                url,
+                hash: image_hash,
+            });
         }
 
         if let Some(summary) = summary {
-            tags.push(Nip94Tag::Summary(summary).to_tag());
+            tags.push(Nip94Tag::Summary(summary));
         }
 
         if let Some(alt) = alt {
-            tags.push(Nip94Tag::Alt(alt).to_tag());
+            tags.push(Nip94Tag::Alt(alt));
         }
 
         for url in fallback {
-            tags.push(Nip94Tag::Fallback(url).to_tag());
+            tags.push(Nip94Tag::Fallback(url));
         }
 
         if let Some(service) = service {
-            tags.push(Nip94Tag::Service(service).to_tag());
+            tags.push(Nip94Tag::Service(service));
         }
 
         tags
     }
 }
 
-impl TryFrom<Vec<Tag>> for FileMetadata {
+impl TryFrom<Tags> for FileMetadata {
     type Error = Error;
 
-    fn try_from(value: Vec<Tag>) -> Result<Self, Self::Error> {
+    fn try_from(value: Tags) -> Result<Self, Self::Error> {
         let mut url: Option<Url> = None;
         let mut mime_type: Option<String> = None;
         let mut hash: Option<Sha256Hash> = None;
@@ -689,7 +715,7 @@ mod tests {
                 hash: Some(hash),
             }
         );
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -698,7 +724,7 @@ mod tests {
         let parsed = Nip94Tag::parse(&tag).unwrap();
 
         assert_eq!(parsed, Nip94Tag::Service(String::from("nip96")));
-        assert_eq!(parsed.to_tag(), Tag::parse(tag).unwrap());
+        assert_eq!(Tags::from_iter([parsed]), Tags::parse([tag]).unwrap());
     }
 
     #[test]
@@ -711,24 +737,22 @@ mod tests {
             width: 640,
             height: 640,
         };
-        let tags = vec![
-            Nip94Tag::Dim(dim).to_tag(),
-            Nip94Tag::Sha256(hash).to_tag(),
-            Nip94Tag::Url(url.clone()).to_tag(),
-            Nip94Tag::MimeType(String::from("image/jpeg")).to_tag(),
-            Nip94Tag::OriginalHash(hash).to_tag(),
-            Nip94Tag::TorrentInfohash(String::from("abc123")).to_tag(),
+        let tags: Tags = Tags::from_iter([
+            Nip94Tag::Dim(dim),
+            Nip94Tag::Sha256(hash),
+            Nip94Tag::Url(url.clone()),
+            Nip94Tag::MimeType(String::from("image/jpeg")),
+            Nip94Tag::OriginalHash(hash),
+            Nip94Tag::TorrentInfohash(String::from("abc123")),
             Nip94Tag::Thumb {
                 url: thumb_url.clone(),
                 hash: Some(thumb_hash),
-            }
-            .to_tag(),
-            Nip94Tag::Summary(String::from("example summary")).to_tag(),
-            Nip94Tag::Alt(String::from("example alt")).to_tag(),
-            Nip94Tag::Fallback(Url::parse("https://fallback.example.com/file.jpg").unwrap())
-                .to_tag(),
-            Nip94Tag::Service(String::from("nip96")).to_tag(),
-        ];
+            },
+            Nip94Tag::Summary(String::from("example summary")),
+            Nip94Tag::Alt(String::from("example alt")),
+            Nip94Tag::Fallback(Url::parse("https://fallback.example.com/file.jpg").unwrap()),
+            Nip94Tag::Service(String::from("nip96")),
+        ]);
         let got = FileMetadata::try_from(tags).unwrap();
         let expected = FileMetadata::new(url, "image/jpeg", hash)
             .original_hash(hash)
@@ -751,11 +775,11 @@ mod tests {
             width: 640,
             height: 640,
         };
-        let tags = vec![
-            Nip94Tag::Dim(dim).to_tag(),
-            Nip94Tag::Sha256(hash).to_tag(),
-            Nip94Tag::MimeType(String::from("image/jpeg")).to_tag(),
-        ];
+        let tags: Tags = Tags::from_iter([
+            Nip94Tag::Dim(dim),
+            Nip94Tag::Sha256(hash),
+            Nip94Tag::MimeType(String::from("image/jpeg")),
+        ]);
         let got = FileMetadata::try_from(tags).unwrap_err();
 
         assert_eq!(got.kind(), ErrorKind::Missing);
@@ -769,11 +793,11 @@ mod tests {
             width: 640,
             height: 640,
         };
-        let tags = vec![
-            Nip94Tag::Dim(dim).to_tag(),
-            Nip94Tag::Sha256(hash).to_tag(),
-            Nip94Tag::Url(url).to_tag(),
-        ];
+        let tags: Tags = Tags::from_iter([
+            Nip94Tag::Dim(dim),
+            Nip94Tag::Sha256(hash),
+            Nip94Tag::Url(url),
+        ]);
         let got = FileMetadata::try_from(tags).unwrap_err();
 
         assert_eq!(got.kind(), ErrorKind::Missing);
@@ -786,11 +810,11 @@ mod tests {
             width: 640,
             height: 640,
         };
-        let tags = vec![
-            Nip94Tag::Dim(dim).to_tag(),
-            Nip94Tag::Url(url).to_tag(),
-            Nip94Tag::MimeType(String::from("image/jpeg")).to_tag(),
-        ];
+        let tags: Tags = Tags::from_iter([
+            Nip94Tag::Dim(dim),
+            Nip94Tag::Url(url),
+            Nip94Tag::MimeType(String::from("image/jpeg")),
+        ]);
         let got = FileMetadata::try_from(tags).unwrap_err();
 
         assert_eq!(got.kind(), ErrorKind::Missing);
