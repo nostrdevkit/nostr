@@ -27,6 +27,12 @@
 
 -->
 
+## Unreleased
+
+### Security
+
+- Fix NIP-42 auth bypass in `LocalRelay`
+
 ## v0.45.6 - 2026/11/03
 
 ### Security

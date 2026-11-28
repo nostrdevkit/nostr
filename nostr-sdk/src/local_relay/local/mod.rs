@@ -170,10 +170,14 @@ mod tests {
     use nostr::filter::Filter;
     use nostr::key::Keys;
     use nostr::message::{MachineReadablePrefix, RelayMessage};
+    use nostr::nips::nip17::PrivateDirectMessageBuilder;
     use tokio::time;
 
     use super::*;
+    use crate::authenticator::SignerAuthenticator;
+    use crate::error::ErrorKind;
     use crate::local_relay::{QueryPolicy, QueryPolicyResult};
+    use crate::relay::Relay;
 
     #[derive(Debug)]
     struct RejectQueries;
@@ -487,6 +491,158 @@ mod tests {
             } if subscription_id.as_str() == "neg"
                 && message.starts_with("auth-required:")
         ));
+    }
+
+    #[tokio::test]
+    async fn test_nip42_read_auth_is_required_for_gift_wraps_when_auth_dm_enabled() {
+        let relay = LocalRelay::builder().auth_dm(true).build();
+        relay.run().await.unwrap();
+
+        let receiver = Keys::generate();
+        let sender = Keys::generate();
+        let other = Keys::generate();
+
+        let event = PrivateDirectMessageBuilder::new(receiver.public_key(), "Testing")
+            .finalize(&sender)
+            .unwrap();
+        relay.add_event(event.clone()).await.unwrap();
+
+        let url: RelayUrl = relay.url().await;
+
+        // A client without an authenticator
+        let unauth_client = Relay::new(url.clone());
+        unauth_client.connect();
+
+        // A client with other authenticator
+        let other_auth_client = Relay::builder(url.clone())
+            .authenticator(SignerAuthenticator::new(other.clone()))
+            .build();
+        other_auth_client.connect();
+
+        // A client with the right authenticator
+        let auth_client = Relay::builder(url)
+            .authenticator(SignerAuthenticator::new(receiver.clone()))
+            .build();
+        auth_client.connect();
+
+        // Attempt to request the events by p tag and kind...
+        let filter: Filter = Filter::new()
+            .pubkey(receiver.public_key())
+            .kind(Kind::GiftWrap);
+        // ...with unauth client
+        let received = unauth_client
+            .stream_events(filter.clone())
+            .await
+            .unwrap()
+            .next()
+            .await;
+        assert_eq!(
+            received,
+            Some(Err(Error::with_static_message(
+                ErrorKind::Rejected,
+                "auth-required: you must auth"
+            )))
+        );
+        // ...with the other auth client
+        let received = other_auth_client
+            .stream_events(filter.clone())
+            .await
+            .unwrap()
+            .next()
+            .await;
+        assert_eq!(
+            received,
+            Some(Err(Error::with_static_message(
+                ErrorKind::Rejected,
+                "error: you cannot request another user's gift wrap"
+            )))
+        );
+        // ...with the right auth client
+        let received = auth_client
+            .stream_events(filter.clone())
+            .await
+            .unwrap()
+            .next()
+            .await;
+        assert_eq!(received, Some(Ok(event.clone())));
+
+        // Attempt to request the events by p tag without kind...
+        let filter: Filter = Filter::new().pubkey(receiver.public_key());
+        // ...with unauth client
+        let received = unauth_client
+            .stream_events(filter.clone())
+            .await
+            .unwrap()
+            .next()
+            .await;
+        assert_eq!(
+            received,
+            Some(Err(Error::with_static_message(
+                ErrorKind::Rejected,
+                "auth-required: you must auth"
+            )))
+        );
+        // ...with the other auth client
+        let received = other_auth_client
+            .stream_events(filter.clone())
+            .await
+            .unwrap()
+            .next()
+            .await;
+        assert_eq!(
+            received,
+            Some(Err(Error::with_static_message(
+                ErrorKind::Rejected,
+                "error: you cannot request another user's gift wrap"
+            )))
+        );
+        // ...with the right auth client
+        let received = auth_client
+            .stream_events(filter.clone())
+            .await
+            .unwrap()
+            .next()
+            .await;
+        assert_eq!(received, Some(Ok(event.clone())));
+
+        // Attempt to request the events by p tag with empty kinds...
+        let filter: Filter = Filter::new().pubkey(receiver.public_key()).kinds([]);
+        // ...with unauth client
+        let received = unauth_client
+            .stream_events(filter.clone())
+            .await
+            .unwrap()
+            .next()
+            .await;
+        assert_eq!(
+            received,
+            Some(Err(Error::with_static_message(
+                ErrorKind::Rejected,
+                "auth-required: you must auth"
+            )))
+        );
+        // ...with the other auth client
+        let received = other_auth_client
+            .stream_events(filter.clone())
+            .await
+            .unwrap()
+            .next()
+            .await;
+        assert_eq!(
+            received,
+            Some(Err(Error::with_static_message(
+                ErrorKind::Rejected,
+                "error: you cannot request another user's gift wrap"
+            )))
+        );
+        // ...with the right auth client
+        let received = auth_client
+            .stream_events(filter.clone())
+            .await
+            .unwrap()
+            .next()
+            .await;
+        assert_eq!(received, Some(Ok(event.clone())));
     }
 
     #[tokio::test]
