@@ -308,6 +308,13 @@ impl BlossomClient {
         #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
         let mut response: Response = request.send().await?;
 
+        // The trusted origin is the one the request was originally addressed
+        // to. Sensitive headers are only ever sent to this origin: as soon as
+        // a redirect leaves it (or downgrades to plain HTTP), they are
+        // permanently dropped for all the following hops.
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut trusted_origin: Option<Origin> = Some(self.base_url.origin());
+
         #[cfg(not(target_arch = "wasm32"))]
         for _ in 0..10 {
             if !response.status().is_redirection() {
@@ -328,15 +335,23 @@ impl BlossomClient {
                 ));
             }
 
-            let same_origin = next_url.origin() == response.url().origin();
-            let mut next_headers = headers.clone();
-            if !same_origin {
-                next_headers.remove(AUTHORIZATION);
+            // Drop sensitive headers if the hop leaves the trusted origin or
+            // downgrades from HTTPS to plain HTTP. The decision is sticky: a
+            // later same-origin hop must not re-attach them.
+            let is_trusted =
+                trusted_origin.as_ref() == Some(&next_url.origin()) && next_url.scheme() == "https";
+            if !is_trusted {
+                headers.remove(AUTHORIZATION);
+                if let Some(payment) = payment {
+                    headers.remove(format!("X-{}", payment.method).as_str());
+                }
+                trusted_origin = None;
             }
+
             response = self
                 .client
                 .get(next_url)
-                .headers(next_headers)
+                .headers(headers.clone())
                 .send()
                 .await?;
         }
